@@ -1,0 +1,159 @@
+﻿from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_DIR = PROJECT_ROOT / "src"
+
+if str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+from mini_smolagent import (  # noqa: E402
+    AgentRunResult,
+    ChatMessage,
+    ModelResponse,
+    RunItem,
+    StepRecord,
+    ToolArgument,
+    ToolCall,
+    ToolSpec,
+    render_tool_signature,
+    tool_to_prompt_text,
+)
+
+
+class ContractsTestCase(unittest.TestCase):
+    def test_run_result_uses_run_items_without_trace(self) -> None:
+        run_result = AgentRunResult(
+            final_answer=None,
+            step_results=[],
+            reached_final_answer=False,
+            steps_taken=0,
+            new_items=(RunItem("run_stopped", 1, "max_steps_reached"),),
+        )
+
+        self.assertFalse(hasattr(run_result, "trace"))
+
+    def test_tool_spec_keeps_argument_names(self) -> None:
+        tool_spec = ToolSpec(
+            name="search_docs",
+            description="Search local documents.",
+            arguments=[
+                ToolArgument(
+                    name="query",
+                    description="Search query text.",
+                    type="string",
+                ),
+                ToolArgument(
+                    name="top_k",
+                    description="How many results to return.",
+                    type="integer",
+                    required=False,
+                ),
+            ],
+            returns="array",
+        )
+
+        self.assertEqual(tool_spec.argument_names(), ["query", "top_k"])
+
+    def test_model_response_holds_raw_response_and_tool_calls(self) -> None:
+        tool_call = ToolCall(
+            tool_name="get_weather",
+            arguments={"city": "Shanghai"},
+            call_id="call_1",
+        )
+        raw_response = {"id": "resp_1"}
+
+        model_response = ModelResponse(
+            response_id="resp_1",
+            output=[{"type": "function_call"}],
+            output_text=None,
+            tool_calls=[tool_call],
+            raw=raw_response,
+        )
+
+        self.assertEqual(model_response.response_id, "resp_1")
+        self.assertEqual(model_response.tool_calls, [tool_call])
+        self.assertIs(model_response.raw, raw_response)
+
+    def test_run_item_records_one_agent_event(self) -> None:
+        tool_call = ToolCall("echo_text", {"text": "hello"}, "call_1")
+
+        run_item = RunItem(
+            item_type="tool_call",
+            step_number=1,
+            payload=tool_call,
+        )
+
+        self.assertEqual(run_item.item_type, "tool_call")
+        self.assertEqual(run_item.step_number, 1)
+        self.assertIs(run_item.payload, tool_call)
+
+    def test_render_tool_signature(self) -> None:
+        tool_spec = ToolSpec(
+            name="calculator",
+            description="Evaluate an arithmetic expression.",
+            arguments=[
+                ToolArgument(
+                    name="expression",
+                    description="Arithmetic expression.",
+                    type="string",
+                )
+            ],
+            returns="number",
+        )
+
+        self.assertEqual(
+            render_tool_signature(tool_spec),
+            "calculator(expression: string) -> number",
+        )
+
+    def test_tool_to_prompt_text_contains_core_fields(self) -> None:
+        tool_spec = ToolSpec(
+            name="translate_text",
+            description="Translate input text to another language.",
+            arguments=[
+                ToolArgument(
+                    name="text",
+                    description="Input text.",
+                    type="string",
+                ),
+                ToolArgument(
+                    name="target_language",
+                    description="Target language name.",
+                    type="string",
+                ),
+            ],
+            returns="string",
+        )
+
+        prompt_text = tool_to_prompt_text(tool_spec)
+
+        self.assertIn("translate_text", prompt_text)
+        self.assertIn("target_language(string)", prompt_text)
+        self.assertIn("returns: string", prompt_text)
+
+    def test_step_record_can_hold_messages_and_calls(self) -> None:
+        step_record = StepRecord(
+            step_number=2,
+            messages=[ChatMessage(role="user", content="Search the docs.")],
+            tool_calls=[
+                ToolCall(
+                    tool_name="search_docs",
+                    arguments={"query": "memory", "top_k": 3},
+                    call_id="call_2",
+                )
+            ],
+            observation="Found 3 results.",
+        )
+
+        self.assertEqual(step_record.step_number, 2)
+        self.assertEqual(step_record.messages[0].role, "user")
+        self.assertEqual(step_record.tool_calls[0].arguments["top_k"], 3)
+        self.assertEqual(step_record.observation, "Found 3 results.")
+
+
+if __name__ == "__main__":
+    unittest.main()
