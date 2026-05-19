@@ -25,6 +25,7 @@ from mini_smolagent import (  # noqa: E402
     ToolRegistry,
     ToolSpec,
     create_final_answer_tool,
+    create_python_executor_tool,
 )
 
 
@@ -127,6 +128,22 @@ print("after")"""
         self.assertEqual(result.logs, "before\n")
         self.assertTrue(result.is_final_answer)
 
+    def test_python_executor_tool_argument_has_schema(self) -> None:
+        tool = create_python_executor_tool(MiniPythonExecutor())
+
+        argument = tool.spec.arguments[0]
+
+        self.assertEqual(argument.name, "code")
+        self.assertEqual(argument.schema, {"type": "string"})
+
+    def test_final_answer_tool_argument_has_schema(self) -> None:
+        tool = create_final_answer_tool()
+
+        argument = tool.spec.arguments[0]
+
+        self.assertEqual(argument.name, "answer")
+        self.assertEqual(argument.schema, {"type": "string"})
+
 
 class AgentPythonExecutionCapabilityTestCase(unittest.TestCase):
     def test_agent_registers_python_executor_when_capability_enabled(self) -> None:
@@ -223,7 +240,7 @@ class AgentPythonExecutionCapabilityTestCase(unittest.TestCase):
                         ToolArgument(
                             name="text",
                             description="Input text.",
-                            type="string",
+                            schema={"type": "string"},
                         )
                     ],
                     returns="string",
@@ -346,7 +363,7 @@ class AgentPythonExecutionCapabilityTestCase(unittest.TestCase):
                         ToolArgument(
                             name="code",
                             description="Python code to execute.",
-                            type="string",
+                            schema={"type": "string"},
                         )
                     ],
                     returns="object",

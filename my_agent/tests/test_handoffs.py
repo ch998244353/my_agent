@@ -53,7 +53,7 @@ class HandoffsTestCase(unittest.TestCase):
         )
         self.assertEqual(tool_specs[0].description, "Hand off control to Math Agent.")
         self.assertEqual(tool_specs[0].arguments[0].name, "task")
-        self.assertEqual(tool_specs[0].arguments[0].type, "string")
+        self.assertEqual(tool_specs[0].arguments[0].schema, {"type": "string"})
         self.assertEqual(tool_specs[0].returns, "object")
 
     def test_handoff_target_for_finds_matching_agent(self) -> None:

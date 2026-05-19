@@ -89,7 +89,7 @@ def echo_tool() -> FunctionTool:
                 ToolArgument(
                     name="text",
                     description="Input text.",
-                    type="string",
+                    schema={"type": "string"},
                 )
             ],
             returns="string",
@@ -228,7 +228,7 @@ class AgentTestCase(unittest.TestCase):
                         ToolArgument(
                             name="city",
                             description="City name.",
-                            type="string",
+                            schema={"type": "string"},
                         )
                     ],
                     returns="string",
@@ -245,7 +245,7 @@ class AgentTestCase(unittest.TestCase):
                         ToolArgument(
                             name="report",
                             description="Weather report text.",
-                            type="string",
+                            schema={"type": "string"},
                         )
                     ],
                     returns="string",

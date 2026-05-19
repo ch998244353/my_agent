@@ -13,7 +13,7 @@ def tool_spec_to_openai_tool(tool_spec: ToolSpec) -> dict[str, Any]:
     required: list[str] = []
 
     for argument in tool_spec.arguments:
-        argument_schema = {"type": _json_schema_type(argument.type)}
+        argument_schema = _argument_to_openai_schema(argument)
         argument_schema["description"] = argument.description
 
         properties[argument.name] = argument_schema
@@ -34,18 +34,8 @@ def tool_spec_to_openai_tool(tool_spec: ToolSpec) -> dict[str, Any]:
     }
 
 
-def _json_schema_type(tool_type: str) -> str:
-    if tool_type == "integer":
-        return "integer"
-    if tool_type == "number":
-        return "number"
-    if tool_type == "boolean":
-        return "boolean"
-    if tool_type == "array":
-        return "array"
-    if tool_type == "object":
-        return "object"
-    return "string"
+def _argument_to_openai_schema(argument: Any) -> dict[str, Any]:
+    return dict(argument.schema)
 
 # ChatMessage 转换成 OpenAI Responses API 的 input 消息格式
 def chat_message_to_response_input(message: ChatMessage) -> dict[str, str]:

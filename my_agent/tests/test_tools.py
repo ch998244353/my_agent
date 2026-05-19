@@ -33,12 +33,12 @@ class ToolRegistryTestCase(unittest.TestCase):
                     ToolArgument(
                         name="a",
                         description="First number.",
-                        type="number",
+                        schema={"type": "number"},
                     ),
                     ToolArgument(
                         name="b",
                         description="Second number.",
-                        type="number",
+                        schema={"type": "number"},
                     ),
                 ],
                 returns="number",
@@ -67,7 +67,7 @@ class ToolRegistryTestCase(unittest.TestCase):
                         ToolArgument(
                             name="city",
                             description="City name.",
-                            type="string",
+                            schema={"type": "string"},
                         )
                     ],
                     returns="string",
@@ -90,7 +90,7 @@ class ToolRegistryTestCase(unittest.TestCase):
                         ToolArgument(
                             name="query",
                             description="Search query.",
-                            type="string",
+                            schema={"type": "string"},
                         )
                     ],
                     returns="array",
@@ -122,12 +122,12 @@ class ToolRegistryTestCase(unittest.TestCase):
         self.assertEqual(get_weather.spec.returns, "string")
         self.assertEqual(
             [
-                (argument.name, argument.type, argument.required)
+                (argument.name, argument.schema, argument.required)
                 for argument in get_weather.spec.arguments
             ],
             [
-                ("city", "string", True),
-                ("days", "integer", False),
+                ("city", {"type": "string"}, True),
+                ("days", {"type": "integer"}, False),
             ],
         )
         self.assertEqual(get_weather.execute({"city": "Shanghai"}), "Shanghai:1")
@@ -168,7 +168,7 @@ class ToolRegistryTestCase(unittest.TestCase):
             explode.execute({})
         self.assertIn("service unavailable", str(error.exception))
 
-    def test_function_tool_maps_rich_annotations_to_tool_types(self) -> None:
+    def test_function_tool_maps_rich_annotations_to_tool_schemas(self) -> None:
         @function_tool
         def search_docs(
             query: str,
@@ -180,11 +180,14 @@ class ToolRegistryTestCase(unittest.TestCase):
 
         arguments = {argument.name: argument for argument in search_docs.spec.arguments}
 
-        self.assertEqual(arguments["mode"].type, "string")
-        self.assertEqual(arguments["tags"].type, "array")
+        self.assertEqual(
+            arguments["mode"].schema,
+            {"type": "string", "enum": ["fast", "deep"]},
+        )
+        self.assertEqual(arguments["tags"].schema, {"type": ["array", "null"]})
         self.assertEqual(search_docs.spec.returns, "array")
 
-    def test_function_tool_arguments_use_tool_type(self) -> None:
+    def test_function_tool_arguments_use_schema(self) -> None:
         @function_tool
         def get_scores(names: list[str]) -> list[int]:
             """Get scores by name."""
@@ -192,8 +195,7 @@ class ToolRegistryTestCase(unittest.TestCase):
 
         argument = get_scores.spec.arguments[0]
 
-        self.assertEqual(argument.type, "array")
-        self.assertFalse(hasattr(argument, "schema"))
+        self.assertEqual(argument.schema, {"type": "array", "items": {"type": "string"}})
 
 
 if __name__ == "__main__":

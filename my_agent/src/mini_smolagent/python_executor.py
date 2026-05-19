@@ -91,7 +91,7 @@ def create_python_executor_tool(
                 ToolArgument(
                     name="code",
                     description="Python code to execute.",
-                    type="string",
+                    schema={"type": "string"},
                 )
             ],
             returns="object",

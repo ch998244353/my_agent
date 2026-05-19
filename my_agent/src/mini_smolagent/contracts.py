@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from .tool_schema import schema_type_label
+
 if TYPE_CHECKING:
     from .guardrails import InputGuardrailResult, OutputGuardrailResult
     from .run_context import RunContextWrapper
@@ -21,7 +23,7 @@ class ChatMessage:
 class ToolArgument:
     name: str
     description: str
-    type: str
+    schema: dict[str, Any] = field(default_factory=dict)
     required: bool = True
 
 
@@ -104,9 +106,15 @@ class CodeExecutionResult:
     is_final_answer: bool = False
 
 
+def _argument_type_label(argument: ToolArgument) -> str:
+    if argument.schema:
+        return schema_type_label(argument.schema)
+    return "any"
+
+
 def render_tool_signature(tool_spec: ToolSpec) -> str:
     arguments = ", ".join(
-        f"{argument.name}: {argument.type}"
+        f"{argument.name}: {_argument_type_label(argument)}"
         for argument in tool_spec.arguments
     )
     return f"{tool_spec.name}({arguments}) -> {tool_spec.returns}"
@@ -114,7 +122,7 @@ def render_tool_signature(tool_spec: ToolSpec) -> str:
 
 def tool_to_prompt_text(tool_spec: ToolSpec) -> str:
     arguments_text = ", ".join(
-        f"{argument.name}({argument.type})"
+        f"{argument.name}({_argument_type_label(argument)})"
         for argument in tool_spec.arguments
     )
     return (

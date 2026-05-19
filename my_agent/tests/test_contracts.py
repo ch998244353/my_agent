@@ -44,12 +44,12 @@ class ContractsTestCase(unittest.TestCase):
                 ToolArgument(
                     name="query",
                     description="Search query text.",
-                    type="string",
+                    schema={"type": "string"},
                 ),
                 ToolArgument(
                     name="top_k",
                     description="How many results to return.",
-                    type="integer",
+                    schema={"type": "integer"},
                     required=False,
                 ),
             ],
@@ -57,6 +57,16 @@ class ContractsTestCase(unittest.TestCase):
         )
 
         self.assertEqual(tool_spec.argument_names(), ["query", "top_k"])
+
+    def test_tool_argument_uses_schema_without_legacy_type(self) -> None:
+        argument = ToolArgument(
+            name="query",
+            description="Search query text.",
+            schema={"type": "string"},
+        )
+
+        self.assertEqual(argument.schema, {"type": "string"})
+        self.assertFalse(hasattr(argument, "type"))
 
     def test_model_response_holds_raw_response_and_tool_calls(self) -> None:
         tool_call = ToolCall(
@@ -99,7 +109,7 @@ class ContractsTestCase(unittest.TestCase):
                 ToolArgument(
                     name="expression",
                     description="Arithmetic expression.",
-                    type="string",
+                    schema={"type": "string"},
                 )
             ],
             returns="number",
@@ -110,6 +120,25 @@ class ContractsTestCase(unittest.TestCase):
             "calculator(expression: string) -> number",
         )
 
+    def test_render_tool_signature_uses_argument_schema_label(self) -> None:
+        tool_spec = ToolSpec(
+            name="collect_tags",
+            description="Collect tags.",
+            arguments=[
+                ToolArgument(
+                    name="tags",
+                    description="Tags to collect.",
+                    schema={"type": "array", "items": {"type": "string"}},
+                )
+            ],
+            returns="array",
+        )
+
+        self.assertEqual(
+            render_tool_signature(tool_spec),
+            "collect_tags(tags: array[string]) -> array",
+        )
+
     def test_tool_to_prompt_text_contains_core_fields(self) -> None:
         tool_spec = ToolSpec(
             name="translate_text",
@@ -118,12 +147,12 @@ class ContractsTestCase(unittest.TestCase):
                 ToolArgument(
                     name="text",
                     description="Input text.",
-                    type="string",
+                    schema={"type": "string"},
                 ),
                 ToolArgument(
                     name="target_language",
                     description="Target language name.",
-                    type="string",
+                    schema={"type": "string"},
                 ),
             ],
             returns="string",
@@ -134,6 +163,24 @@ class ContractsTestCase(unittest.TestCase):
         self.assertIn("translate_text", prompt_text)
         self.assertIn("target_language(string)", prompt_text)
         self.assertIn("returns: string", prompt_text)
+
+    def test_tool_to_prompt_text_uses_argument_schema_label(self) -> None:
+        tool_spec = ToolSpec(
+            name="filter_docs",
+            description="Filter documents.",
+            arguments=[
+                ToolArgument(
+                    name="tags",
+                    description="Tags to match.",
+                    schema={"type": "array", "items": {"type": "string"}},
+                )
+            ],
+            returns="array",
+        )
+
+        prompt_text = tool_to_prompt_text(tool_spec)
+
+        self.assertIn("tags(array[string])", prompt_text)
 
     def test_step_record_can_hold_messages_and_calls(self) -> None:
         step_record = StepRecord(

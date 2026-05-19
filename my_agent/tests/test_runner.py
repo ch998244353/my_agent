@@ -73,7 +73,7 @@ def echo_tool() -> FunctionTool:
                 ToolArgument(
                     name="text",
                     description="Input text.",
-                    type="string",
+                    schema={"type": "string"},
                 )
             ],
             returns="string",

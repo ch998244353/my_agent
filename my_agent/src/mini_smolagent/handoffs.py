@@ -40,7 +40,7 @@ def handoff_tool_specs(handoffs: list[Agent]) -> list[ToolSpec]:
                 ToolArgument(
                     name="task",
                     description="Task that the target agent should handle.",
-                    type="string",
+                    schema={"type": "string"},
                 )
             ],
             returns="object",

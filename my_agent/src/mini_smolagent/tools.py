@@ -6,6 +6,7 @@ from types import UnionType
 from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type_hints
 
 from .contracts import ToolArgument, ToolSpec
+from .tool_schema import annotation_to_json_schema
 
 
 FINAL_ANSWER_TOOL_NAME = "final_answer"
@@ -69,6 +70,7 @@ class FunctionTool:
             raise ToolExecutionError(self.name, str(exc)) from exc
 
 
+# 把普通 Python 函数转换成 FunctionTool
 def function_tool(
     func: Callable[..., Any] | None = None,
     *,
@@ -93,7 +95,13 @@ def _create_function_tool(
     name_override: str | None = None,
     description_override: str | None = None,
 ) -> FunctionTool:
-    signature = inspect.signature(func)  # 读取函数的参数
+    signature = inspect.signature(func)  # 读取函数的参数签名
+    '''
+    def search(query: str, top_k: int = 5) -> list[str]:
+    signature.parameters = {query: str , top_k: int = 5}
+    signature.return_annotation = list[str]
+    {  "query": Parameter("query: str"),  "top_k": Parameter("top_k: int = 5"),}
+    '''
     type_hints = get_type_hints(func)    # 读取函数里的类型标注
     unsupported_kinds = {                # 定义不支持的参数类型
         inspect.Parameter.VAR_POSITIONAL,
@@ -127,12 +135,12 @@ def _create_function_tool(
                 "function_tool only supports keyword-compatible parameters."
             )
 
-        annotation = type_hints.get(parameter_name, parameter.annotation)
+        annotation = type_hints.get(parameter_name, parameter.annotation) # 有就返回,否则就是parameter.annotation
         arguments.append(
             ToolArgument(
                 name=parameter_name,
                 description=argument_descriptions.get(parameter_name, ""),
-                type=_annotation_to_tool_type(annotation),
+                schema=annotation_to_json_schema(annotation),
                 required=parameter.default is inspect._empty,
             )
         )
@@ -229,7 +237,7 @@ def create_final_answer_tool() -> FunctionTool:
                 ToolArgument(
                     name="answer",
                     description="Final answer to return to the user.",
-                    type="string",
+                    schema={"type": "string"},
                 )
             ],
             returns="string",

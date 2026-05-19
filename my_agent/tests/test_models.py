@@ -62,7 +62,7 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
                 ToolArgument(
                     name="city",
                     description="City name.",
-                    type="string",
+                    schema={"type": "string"},
                 )
             ],
             returns="string",
@@ -80,7 +80,7 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
         self.assertEqual(openai_tool["parameters"]["required"], ["city"])
         self.assertFalse(openai_tool["parameters"]["additionalProperties"])
 
-    def test_tool_spec_to_openai_tool_uses_argument_type_and_required_flag(self) -> None:
+    def test_tool_spec_to_openai_tool_uses_argument_schema_and_required_flag(self) -> None:
         tool_spec = ToolSpec(
             name="search_docs",
             description="Search documents.",
@@ -88,12 +88,12 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
                 ToolArgument(
                     name="query",
                     description="Search query.",
-                    type="string",
+                    schema={"type": "string"},
                 ),
                 ToolArgument(
                     name="mode",
                     description="Search mode.",
-                    type="string",
+                    schema={"type": "string"},
                     required=False,
                 ),
             ],
@@ -109,6 +109,45 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
             {
                 "type": "string",
                 "description": "Search mode.",
+            },
+        )
+
+    def test_tool_spec_to_openai_tool_prefers_argument_schema(self) -> None:
+        tool_spec = ToolSpec(
+            name="rank_docs",
+            description="Rank documents.",
+            arguments=[
+                ToolArgument(
+                    name="tags",
+                    description="Tags to include.",
+                    schema={"type": "array", "items": {"type": "string"}},
+                ),
+                ToolArgument(
+                    name="mode",
+                    description="Ranking mode.",
+                    schema={"type": "string", "enum": ["fast", "deep"]},
+                ),
+            ],
+            returns="array",
+        )
+
+        openai_tool = tool_spec_to_openai_tool(tool_spec)
+
+        properties = openai_tool["parameters"]["properties"]
+        self.assertEqual(
+            properties["tags"],
+            {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Tags to include.",
+            },
+        )
+        self.assertEqual(
+            properties["mode"],
+            {
+                "type": "string",
+                "enum": ["fast", "deep"],
+                "description": "Ranking mode.",
             },
         )
 
@@ -223,7 +262,7 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
                 ToolArgument(
                     name="city",
                     description="City name.",
-                    type="string",
+                    schema={"type": "string"},
                 )
             ],
             returns="string",
@@ -270,7 +309,7 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
                 ToolArgument(
                     name="city",
                     description="City name.",
-                    type="string",
+                    schema={"type": "string"},
                 )
             ],
             returns="string",
@@ -388,7 +427,7 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
                 ToolArgument(
                     name="city",
                     description="City name.",
-                    type="string",
+                    schema={"type": "string"},
                 )
             ],
             returns="string",
