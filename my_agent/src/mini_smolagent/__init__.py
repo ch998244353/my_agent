@@ -1,4 +1,5 @@
 from .agent import Agent, AgentCapabilities
+from .agent_tools import AgentToolError, create_agent_tool
 from .agents import MiniCodeAgent, MiniToolCallingAgent, MultiStepAgent
 from .contracts import (
     AgentRunResult,
@@ -70,6 +71,7 @@ __all__ = [
     "AgentRunResult",
     "AgentMemory",
     "AgentSession",
+    "AgentToolError",
     "ChatMessage",
     "CodeExecutionError",
     "CodeExecutionResult",
@@ -109,6 +111,7 @@ __all__ = [
     "ToolOutputGuardrailTripwireTriggered",
     "ToolRegistry",
     "ToolSpec",
+    "create_agent_tool",
     "create_python_executor_tool",
     "create_final_answer_tool",
     "function_tool",

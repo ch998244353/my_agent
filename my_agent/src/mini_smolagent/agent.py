@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .contracts import (
@@ -24,6 +25,8 @@ from .run_config import RunConfig
 from .run_context import RunContextWrapper
 from .tools import (
     FINAL_ANSWER_TOOL_NAME,
+    FunctionTool,
+    ToolEnabled,
     ToolNotFoundError,
     ToolRegistry,
     create_final_answer_tool,
@@ -61,6 +64,41 @@ class Agent:
     def __post_init__(self) -> None:
         self._prepare_tools()
         self._prepare_output_schema()
+
+    def clone(self, **overrides: Any) -> Agent:
+        clone_overrides: dict[str, Any] = {
+            "handoffs": list(self.handoffs),
+            "input_guardrails": list(self.input_guardrails),
+            "output_guardrails": list(self.output_guardrails),
+        }
+        clone_overrides.update(overrides)
+        return replace(self, **clone_overrides)
+
+    def as_tool(
+        self,
+        *,
+        tool_name: str | None = None,
+        tool_description: str | None = None,
+        output_extractor: Callable[[AgentRunResult], object] | None = None,
+        memory_factory: Callable[[], AgentMemory] = AgentMemory,
+        is_enabled: ToolEnabled = True,
+        run_config: RunConfig | None = None,
+        max_steps: int | None = None,
+        max_turns: int | None = None,
+    ) -> FunctionTool:
+        from .agent_tools import create_agent_tool
+
+        return create_agent_tool(
+            self,
+            tool_name=tool_name,
+            tool_description=tool_description,
+            output_extractor=output_extractor,
+            memory_factory=memory_factory,
+            is_enabled=is_enabled,
+            run_config=run_config,
+            max_steps=max_steps,
+            max_turns=max_turns,
+        )
 
     def _output_schema(self) -> dict[str, Any] | None:
         return output_schema_from_output_type(self.output_type)

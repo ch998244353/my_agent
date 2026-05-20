@@ -12,13 +12,18 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from mini_smolagent import (  # noqa: E402
+    Agent,
+    AgentMemory,
+    AgentToolError,
     FunctionTool,
+    ToolCall,
     ToolArgument,
     ToolExecutionError,
     ToolNotFoundError,
     ToolRegistry,
     ToolSpec,
     function_tool,
+    create_agent_tool,
 )
 
 
@@ -196,6 +201,68 @@ class ToolRegistryTestCase(unittest.TestCase):
         argument = get_scores.spec.arguments[0]
 
         self.assertEqual(argument.schema, {"type": "array", "items": {"type": "string"}})
+
+    def test_create_agent_tool_runs_child_agent_with_isolated_memory(self) -> None:
+        class FinalAnswerModel:
+            def decide(self, messages, tool_specs):
+                return ToolCall("final_answer", {"answer": "child done"}, "call_1")
+
+        child_agent = Agent(memory=AgentMemory(), model=FinalAnswerModel(), name="Child")
+
+        tool = create_agent_tool(child_agent)
+        result = tool.execute({"input": "Solve this subtask."})
+
+        self.assertEqual(tool.name, "child")
+        self.assertEqual(result, "child done")
+        self.assertIsNone(child_agent.memory.task)
+
+    def test_create_agent_tool_raises_when_child_agent_has_no_final_answer(self) -> None:
+        class NoFinalAnswerModel:
+            def decide(self, messages, tool_specs):
+                return None
+
+        child_agent = Agent(memory=AgentMemory(), model=NoFinalAnswerModel(), name="Child")
+        tool = create_agent_tool(child_agent)
+
+        with self.assertRaises(AgentToolError) as error:
+            tool.execute({"input": "Solve this subtask."})
+
+        self.assertIn("Child", str(error.exception))
+        self.assertIn("did not reach a final answer", str(error.exception))
+
+    def test_create_agent_tool_applies_child_run_limits(self) -> None:
+        class CountingModel:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def decide(self, messages, tool_specs):
+                self.calls += 1
+                return ToolCall("final_answer", {"answer": "child done"}, "call_1")
+
+        model = CountingModel()
+        child_agent = Agent(memory=AgentMemory(), model=model, name="Child")
+        tool = create_agent_tool(child_agent, max_turns=0)
+
+        with self.assertRaises(AgentToolError):
+            tool.execute({"input": "Solve this subtask."})
+
+        self.assertEqual(model.calls, 0)
+
+    def test_create_agent_tool_can_be_disabled(self) -> None:
+        class FinalAnswerModel:
+            def decide(self, messages, tool_specs):
+                return ToolCall("final_answer", {"answer": "child done"}, "call_1")
+
+        child_agent = Agent(memory=AgentMemory(), model=FinalAnswerModel(), name="Child")
+        parent_agent = Agent(memory=AgentMemory(), model=FinalAnswerModel())
+        tool = create_agent_tool(child_agent, is_enabled=False)
+
+        parent_agent.tool_registry.register(tool)
+
+        self.assertNotIn(
+            "child",
+            [tool_spec.name for tool_spec in parent_agent._tool_specs_for_model()],
+        )
 
 
 if __name__ == "__main__":

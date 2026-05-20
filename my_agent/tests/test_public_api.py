@@ -28,6 +28,7 @@ class PublicApiTestCase(unittest.TestCase):
             "AgentMemory",
             "AgentSession",
             "AgentRunResult",
+            "AgentToolError",
             "ChatMessage",
             "FunctionTool",
             "GuardrailFunctionOutput",
@@ -53,6 +54,7 @@ class PublicApiTestCase(unittest.TestCase):
             "ToolExecutionError",
             "ToolRegistry",
             "ToolSpec",
+            "create_agent_tool",
             "function_tool",
             "input_guardrail",
             "output_guardrail",
@@ -66,6 +68,7 @@ class PublicApiTestCase(unittest.TestCase):
     def test_current_core_modules_are_importable(self) -> None:
         module_names = [
             "mini_smolagent.agent",
+            "mini_smolagent.agent_tools",
             "mini_smolagent.agents",
             "mini_smolagent.contracts",
             "mini_smolagent.guardrails",

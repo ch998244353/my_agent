@@ -15,6 +15,7 @@ from mini_smolagent import (  # noqa: E402
     Agent,
     AgentMemory,
     ChatMessage,
+    FunctionTool,
     ModelResponse,
     ModelSettings,
     ToolCall,
@@ -65,6 +66,43 @@ class AgentConfigurationTestCase(unittest.TestCase):
         self.assertEqual(agent.model_settings, ModelSettings())
         self.assertIsNone(agent.output_type)
         self.assertEqual(agent.tool_use_behavior, "run_llm_again")
+
+    def test_agent_clone_replaces_selected_fields_and_copies_lists(self) -> None:
+        original_memory = AgentMemory()
+        replacement_memory = AgentMemory()
+        agent = Agent(memory=original_memory, model=RecordingModel(), name="Planner")
+
+        clone = agent.clone(memory=replacement_memory, name="Planner copy")
+
+        self.assertIsNot(clone, agent)
+        self.assertIs(clone.memory, replacement_memory)
+        self.assertIs(agent.memory, original_memory)
+        self.assertEqual(clone.name, "Planner copy")
+        self.assertIs(clone.model, agent.model)
+        self.assertIs(clone.tool_registry, agent.tool_registry)
+        self.assertIsNot(clone.handoffs, agent.handoffs)
+        self.assertIsNot(clone.input_guardrails, agent.input_guardrails)
+        self.assertIsNot(clone.output_guardrails, agent.output_guardrails)
+
+    def test_agent_as_tool_wraps_agent_as_function_tool(self) -> None:
+        agent = Agent(memory=AgentMemory(), model=RecordingModel(), name="Research Agent")
+
+        tool = agent.as_tool(
+            tool_name="research",
+            tool_description="Run research subtasks.",
+        )
+
+        self.assertIsInstance(tool, FunctionTool)
+        self.assertEqual(tool.name, "research")
+        self.assertEqual(tool.spec.description, "Run research subtasks.")
+        self.assertEqual(tool.spec.arguments[0].name, "input")
+
+    def test_agent_as_tool_accepts_enabled_flag(self) -> None:
+        agent = Agent(memory=AgentMemory(), model=RecordingModel(), name="Research Agent")
+
+        tool = agent.as_tool(is_enabled=False)
+
+        self.assertFalse(tool.is_enabled_for(None, agent))
 
     def test_agent_accepts_identity_prompt_and_output_configuration(self) -> None:
         settings = ModelSettings(temperature=0.2, top_p=0.9, tool_choice="auto")
