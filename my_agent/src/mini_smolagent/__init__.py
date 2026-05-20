@@ -43,6 +43,17 @@ from .runner import Runner
 from .run_config import RunConfig
 from .run_context import RunContextWrapper
 from .run_state import RunState
+from .tool_guardrails import (
+    ToolGuardrailFunctionOutput,
+    ToolInputGuardrail,
+    ToolInputGuardrailResult,
+    ToolInputGuardrailTripwireTriggered,
+    ToolOutputGuardrail,
+    ToolOutputGuardrailResult,
+    ToolOutputGuardrailTripwireTriggered,
+    tool_input_guardrail,
+    tool_output_guardrail,
+)
 from .tools import (
     FINAL_ANSWER_TOOL_NAME,
     FunctionTool,
@@ -88,7 +99,14 @@ __all__ = [
     "ToolArgument",
     "ToolCall",
     "ToolExecutionError",
+    "ToolGuardrailFunctionOutput",
+    "ToolInputGuardrail",
+    "ToolInputGuardrailResult",
+    "ToolInputGuardrailTripwireTriggered",
     "ToolNotFoundError",
+    "ToolOutputGuardrail",
+    "ToolOutputGuardrailResult",
+    "ToolOutputGuardrailTripwireTriggered",
     "ToolRegistry",
     "ToolSpec",
     "create_python_executor_tool",
@@ -96,6 +114,8 @@ __all__ = [
     "function_tool",
     "input_guardrail",
     "output_guardrail",
+    "tool_input_guardrail",
+    "tool_output_guardrail",
     "output_schema_from_output_type",
     "parse_structured_output",
     "render_tool_signature",

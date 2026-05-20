@@ -29,6 +29,7 @@ from .run_steps import (
     run_model_turn,
 )
 from .run_state import RunState, build_run_result
+from .tool_guardrails import ToolGuardrailTripwireTriggered
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -224,7 +225,7 @@ def run_agent_loop(
             )
             break
 
-        turn_input = prepare_turn_input(agent)
+        turn_input = prepare_turn_input(agent, run_state.context_wrapper)
 
         try:
             run_state.record_model_turn()
@@ -318,6 +319,8 @@ def run_agent_loop(
                     # 有 output guardrails 时，execute_tool_call 不能直接确认 final_answer。
                     finalize_output=not output_guardrails,  
                 )
+            except ToolGuardrailTripwireTriggered:
+                raise
             except Exception as exc:
                 emit_error(lifecycle_hooks, context_wrapper, agent, exc)
                 record_tool_error(

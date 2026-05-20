@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import UnionType
 from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type_hints
 
 from .contracts import ToolArgument, ToolSpec
+from .tool_guardrails import ToolInputGuardrail, ToolOutputGuardrail
 from .tool_schema import annotation_to_json_schema
 
 
 FINAL_ANSWER_TOOL_NAME = "final_answer"
+ToolEnabled = bool | Callable[[Any, Any], bool]
 
 
 class ToolNotFoundError(LookupError):
@@ -29,10 +31,18 @@ class ToolExecutionError(RuntimeError):
 class FunctionTool:
     spec: ToolSpec
     handler: Callable[..., Any]
+    is_enabled: ToolEnabled = True
+    tool_input_guardrails: list[ToolInputGuardrail] = field(default_factory=list)
+    tool_output_guardrails: list[ToolOutputGuardrail] = field(default_factory=list)
 
     @property
     def name(self) -> str:
         return self.spec.name
+
+    def is_enabled_for(self, context_wrapper: Any, agent: Any) -> bool:
+        if isinstance(self.is_enabled, bool):
+            return self.is_enabled
+        return bool(self.is_enabled(context_wrapper, agent))
 
     def execute(self, arguments: dict[str, Any]) -> Any:
         
@@ -76,12 +86,18 @@ def function_tool(
     *,
     name_override: str | None = None,
     description_override: str | None = None,
+    is_enabled: ToolEnabled = True,
+    tool_input_guardrails: list[ToolInputGuardrail] | None = None,
+    tool_output_guardrails: list[ToolOutputGuardrail] | None = None,
 ) -> FunctionTool | Callable[[Callable[..., Any]], FunctionTool]:
     def decorator(real_func: Callable[..., Any]) -> FunctionTool:
         return _create_function_tool(
             real_func,
             name_override=name_override,
             description_override=description_override,
+            is_enabled=is_enabled,
+            tool_input_guardrails=tool_input_guardrails,
+            tool_output_guardrails=tool_output_guardrails,
         )
 
     if func is None:
@@ -94,6 +110,9 @@ def _create_function_tool(
     *,
     name_override: str | None = None,
     description_override: str | None = None,
+    is_enabled: ToolEnabled = True,
+    tool_input_guardrails: list[ToolInputGuardrail] | None = None,
+    tool_output_guardrails: list[ToolOutputGuardrail] | None = None,
 ) -> FunctionTool:
     signature = inspect.signature(func)  # 读取函数的参数签名
     '''
@@ -154,6 +173,9 @@ def _create_function_tool(
             returns=_annotation_to_tool_type(return_annotation),
         ),
         handler=func,
+        is_enabled=is_enabled,
+        tool_input_guardrails=list(tool_input_guardrails or []),
+        tool_output_guardrails=list(tool_output_guardrails or []),
     )
 
 
@@ -258,8 +280,12 @@ class ToolRegistry:
             raise ToolNotFoundError(tool_name)
         return self._tools[tool_name]
 
-    def list_specs(self) -> list[ToolSpec]:
-        return [tool.spec for tool in self._tools.values()]
+    def list_specs(self, context_wrapper: Any = None, agent: Any = None) -> list[ToolSpec]:
+        return [
+            tool.spec
+            for tool in self._tools.values()
+            if tool.is_enabled_for(context_wrapper, agent)
+        ]
 
     def execute(self, tool_name: str, arguments: dict[str, Any]) -> Any:
         tool = self.get(tool_name)

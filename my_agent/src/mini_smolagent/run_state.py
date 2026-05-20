@@ -6,6 +6,7 @@ from typing import Any
 from .contracts import AgentRunResult, ModelResponse, RunItem
 from .guardrails import InputGuardrailResult, OutputGuardrailResult
 from .run_context import RunContextWrapper
+from .tool_guardrails import ToolInputGuardrailResult, ToolOutputGuardrailResult
 
 # 保存一次 agent run 的过程状态
 @dataclass
@@ -21,6 +22,8 @@ class RunState:
     context_wrapper: RunContextWrapper = field(default_factory=RunContextWrapper)
     input_guardrail_results: list[InputGuardrailResult] = field(default_factory=list)
     output_guardrail_results: list[OutputGuardrailResult] = field(default_factory=list)
+    tool_input_guardrail_results: list[ToolInputGuardrailResult] = field(default_factory=list)
+    tool_output_guardrail_results: list[ToolOutputGuardrailResult] = field(default_factory=list)
 
     # 运行时判断和递增方法
     def can_call_model(self) -> bool:
@@ -65,6 +68,8 @@ def build_run_result(run_state: RunState) -> AgentRunResult:
         context_wrapper=run_state.context_wrapper,
         input_guardrail_results=tuple(run_state.input_guardrail_results),
         output_guardrail_results=tuple(run_state.output_guardrail_results),
+        tool_input_guardrail_results=tuple(run_state.tool_input_guardrail_results),
+        tool_output_guardrail_results=tuple(run_state.tool_output_guardrail_results),
         raw_responses=raw_responses_from_items(new_items),
         new_items=new_items,
     )

@@ -21,6 +21,7 @@ from .python_executor import (
     create_python_executor_tool,
 )
 from .run_config import RunConfig
+from .run_context import RunContextWrapper
 from .tools import (
     FINAL_ANSWER_TOOL_NAME,
     ToolNotFoundError,
@@ -139,8 +140,14 @@ class Agent:
 
 
     # 普通工具和 handoff 工具合并后一起给模型看
-    def _tool_specs_for_model(self) -> list[ToolSpec]:
-        return [*self.tool_registry.list_specs(), *self._handoff_tool_specs()]
+    def _tool_specs_for_model(
+        self,
+        context_wrapper: RunContextWrapper | None = None,
+    ) -> list[ToolSpec]:
+        return [
+            *self.tool_registry.list_specs(context_wrapper, self),
+            *self._handoff_tool_specs(),
+        ]
 
     
     def _handoff_target_for(self, action: ToolCall) -> Agent | None:

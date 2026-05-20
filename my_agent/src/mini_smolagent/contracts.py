@@ -8,6 +8,7 @@ from .tool_schema import schema_type_label
 if TYPE_CHECKING:
     from .guardrails import InputGuardrailResult, OutputGuardrailResult
     from .run_context import RunContextWrapper
+    from .tool_guardrails import ToolInputGuardrailResult, ToolOutputGuardrailResult
 
 
 MessageRole = Literal["system", "user", "assistant", "tool_call", "tool_response"]
@@ -54,6 +55,7 @@ class ModelResponse:
     raw: Any | None = None
 
 
+# 存“某个工具输入 Guardrail 已运行”的事件 
 @dataclass(frozen=True)
 class RunItem:
     item_type: Literal[
@@ -62,6 +64,8 @@ class RunItem:
         "tool_call",
         "tool_result",
         "tool_error",
+        "tool_input_guardrail",
+        "tool_output_guardrail",
         "handoff",
         "input_guardrail",
         "output_guardrail",
@@ -95,6 +99,8 @@ class AgentRunResult:
     context_wrapper: RunContextWrapper | None = None
     input_guardrail_results: tuple[InputGuardrailResult, ...] = ()
     output_guardrail_results: tuple[OutputGuardrailResult, ...] = ()
+    tool_input_guardrail_results: tuple[ToolInputGuardrailResult, ...] = ()
+    tool_output_guardrail_results: tuple[ToolOutputGuardrailResult, ...] = ()
     raw_responses: tuple[ModelResponse, ...] = ()
     new_items: tuple[RunItem, ...] = ()
 

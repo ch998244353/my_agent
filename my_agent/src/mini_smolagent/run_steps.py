@@ -25,7 +25,12 @@ from .lifecycle import (
     emit_tool_start,
 )
 from .output import set_structured_final_answer
+from .run_context import RunContextWrapper
 from .run_state import RunState
+from .tool_guardrails import (
+    ToolInputGuardrailTripwireTriggered,
+    ToolOutputGuardrailTripwireTriggered,
+)
 from .tools import FINAL_ANSWER_TOOL_NAME
 
 if TYPE_CHECKING:
@@ -170,10 +175,14 @@ def record_tool_output(model: Any, action: ToolCall, output: Any) -> None:
 
 
 # 把“准备本轮模型输入”的职责集中到 run_steps.py。
-def prepare_turn_input(agent: Agent) -> TurnInput:
+def prepare_turn_input(
+    agent: Agent,
+    context_wrapper: RunContextWrapper | None = None,
+) -> TurnInput:
+    context_wrapper = context_wrapper or RunContextWrapper()
     return TurnInput(
         messages=agent._messages_for_model(),
-        tool_specs=agent._tool_specs_for_model(),
+        tool_specs=agent._tool_specs_for_model(context_wrapper),
     )
 
 
@@ -267,6 +276,44 @@ def record_tool_call(
     )
 
 
+def record_tool_input_guardrail(
+    run_state: RunState,
+    guardrail_result: Any,
+    step_number: int,
+) -> None:
+    run_state.tool_input_guardrail_results.append(guardrail_result)
+    run_state.new_items.append(
+        RunItem(
+            item_type="tool_input_guardrail",
+            step_number=step_number,
+            payload=guardrail_result,
+            metadata={
+                "guardrail_name": guardrail_result.guardrail_name,
+                "behavior": guardrail_result.output.behavior,
+            },
+        )
+    )
+
+
+def record_tool_output_guardrail(
+    run_state: RunState,
+    guardrail_result: Any,
+    step_number: int,
+) -> None:
+    run_state.tool_output_guardrail_results.append(guardrail_result)
+    run_state.new_items.append(
+        RunItem(
+            item_type="tool_output_guardrail",
+            step_number=step_number,
+            payload=guardrail_result,
+            metadata={
+                "guardrail_name": guardrail_result.guardrail_name,
+                "behavior": guardrail_result.output.behavior,
+            },
+        )
+    )
+
+
 def record_tool_error(
     agent: Agent,
     action: ToolCall,
@@ -330,20 +377,75 @@ def execute_tool_call(
     finalize_output: bool = True,
 ) -> ToolExecutionOutcome:
     emit_tool_start(hooks, run_state.context_wrapper, agent, action)
-    result = agent.tool_registry.execute(action.tool_name, action.arguments)
-    result_info = interpret_tool_result(
-        action,
-        result,
-        tool_use_behavior,
-    )
+    rejection_metadata: dict[str, Any] = {}
+    tool = agent.tool_registry.get(action.tool_name)
+    if not tool.is_enabled_for(run_state.context_wrapper, agent):
+        raise RuntimeError(f"Tool '{action.tool_name}' is disabled.")
+    for guardrail in tool.tool_input_guardrails:
+        if not guardrail.is_enabled_for(run_state.context_wrapper, agent, action):
+            continue
+        guardrail_result = guardrail.run(run_state.context_wrapper, agent, action)
+        record_tool_input_guardrail(run_state, guardrail_result, step_number)
+        behavior = guardrail_result.output.behavior
+        if behavior == "allow":
+            continue
+        if behavior == "raise_exception":
+            raise ToolInputGuardrailTripwireTriggered(guardrail_result)
+        result = guardrail_result.output.message or "Tool input rejected by guardrail."
+        result_info = ToolResultInfo(
+            result_value=result,
+            observation=str(result),
+            is_final_answer=False,
+            should_stop=False,
+        )
+        rejection_metadata = {
+            "rejected_by": guardrail_result.guardrail_name,
+            "guardrail_stage": "input",
+            "guardrail_name": guardrail_result.guardrail_name,
+            "guardrail_behavior": behavior,
+        }
+        break
+    else:  # 没有被 break 截断, 进入else分支
+        result = agent.tool_registry.execute(action.tool_name, action.arguments)
+        result_info = interpret_tool_result(
+            action,
+            result,
+            tool_use_behavior,
+        )
+        for guardrail in tool.tool_output_guardrails:
+            if not guardrail.is_enabled_for(run_state.context_wrapper, agent, action, result):
+                continue
+            guardrail_result = guardrail.run(run_state.context_wrapper, agent, action, result)
+            record_tool_output_guardrail(run_state, guardrail_result, step_number)
+            behavior = guardrail_result.output.behavior
+            if behavior == "allow":
+                continue
+            if behavior == "raise_exception":
+                raise ToolOutputGuardrailTripwireTriggered(guardrail_result)
+            result = guardrail_result.output.message or "Tool output rejected by guardrail."
+            result_info = ToolResultInfo(
+                result_value=result,
+                observation=str(result),
+                is_final_answer=False,
+                should_stop=False,
+            )
+            rejection_metadata = {
+                "rejected_by": guardrail_result.guardrail_name,
+                "guardrail_stage": "output",
+                "guardrail_name": guardrail_result.guardrail_name,
+                "guardrail_behavior": behavior,
+            }
+            break
 
     run_state.record_tool_step()
+    result_metadata = {"observation": result_info.observation}
+    result_metadata.update(rejection_metadata)
     run_state.new_items.append(
         RunItem(
             item_type="tool_result",
             step_number=step_number,
             payload=result_info.result_value,
-            metadata={"observation": result_info.observation},
+            metadata=result_metadata,
         )
     )
     record_tool_output(agent.model, action, result)
