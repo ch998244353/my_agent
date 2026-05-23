@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sys
 import unittest
@@ -11,14 +11,14 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from mini_smolagent import (  # noqa: E402
+from agents import (  # noqa: E402
     ChatMessage,
     ModelResponse,
     OpenAIResponsesModel,
     ToolArgument,
     ToolSpec,
 )
-from mini_smolagent.models import (  # noqa: E402
+from agents.models import (  # noqa: E402
     chat_message_to_response_input,
     response_item_to_tool_call,
     response_output_text,

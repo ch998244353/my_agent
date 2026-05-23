@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sys
 import unittest
@@ -11,7 +11,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from mini_smolagent import (  # noqa: E402
+from agents import (  # noqa: E402
     Agent,
     AgentMemory,
     GuardrailFunctionOutput,
@@ -21,6 +21,11 @@ from mini_smolagent import (  # noqa: E402
     ToolCall,
     input_guardrail,
     output_guardrail,
+)
+from agents.tracing import (  # noqa: E402
+    BatchTraceProcessor,
+    InMemoryTracingExporter,
+    set_trace_processors,
 )
 
 
@@ -47,6 +52,9 @@ def final_answer_response(answer: str) -> ModelResponse:
 
 
 class GuardrailsTestCase(unittest.TestCase):
+    def tearDown(self) -> None:
+        set_trace_processors([])
+
     def test_input_guardrail_tripwire_stops_before_model_call(self) -> None:
         seen_inputs = []
 
@@ -79,6 +87,36 @@ class GuardrailsTestCase(unittest.TestCase):
         self.assertEqual(seen_inputs[0][2], "this is forbidden")
         self.assertEqual(result.new_items[0].item_type, "input_guardrail")
         self.assertEqual(result.new_items[-1].payload, "input_guardrail_triggered")
+
+    def test_input_guardrail_creates_guardrail_span(self) -> None:
+        @input_guardrail(name="block_forbidden")
+        def block_forbidden(context, agent, user_input):
+            return GuardrailFunctionOutput(
+                output_info={"reason": "blocked input"},
+                tripwire_triggered=True,
+            )
+
+        exporter = InMemoryTracingExporter()
+        processor = BatchTraceProcessor(exporter)
+        set_trace_processors([processor])
+        model = CountingResponseModel([final_answer_response("should not run")])
+        agent = Agent(memory=AgentMemory(), model=model, name="Safety")
+
+        Runner.run_sync(
+            agent,
+            "blocked",
+            config=RunConfig(input_guardrails=[block_forbidden]),
+        )
+        processor.force_flush()
+        guardrail_spans = [
+            item for item in exporter.items()
+            if item["object"] == "trace.span" and item["span_data"]["type"] == "guardrail"
+        ]
+
+        self.assertEqual(len(guardrail_spans), 1)
+        self.assertEqual(guardrail_spans[0]["span_data"]["name"], "block_forbidden")
+        self.assertEqual(guardrail_spans[0]["span_data"]["stage"], "input")
+        self.assertTrue(guardrail_spans[0]["span_data"]["tripwire_triggered"])
 
     def test_output_guardrail_tripwire_blocks_final_answer(self) -> None:
         @output_guardrail(name="block_unsafe_output")
@@ -116,6 +154,36 @@ class GuardrailsTestCase(unittest.TestCase):
             [item.item_type for item in result.new_items],
         )
         self.assertEqual(result.new_items[-1].payload, "output_guardrail_triggered")
+
+    def test_output_guardrail_creates_guardrail_span(self) -> None:
+        @output_guardrail(name="allow_safe_output")
+        def allow_safe_output(context, agent, output):
+            return GuardrailFunctionOutput(
+                output_info={"checked_output": output},
+                tripwire_triggered=False,
+            )
+
+        exporter = InMemoryTracingExporter()
+        processor = BatchTraceProcessor(exporter)
+        set_trace_processors([processor])
+        model = CountingResponseModel([final_answer_response("safe")])
+        agent = Agent(memory=AgentMemory(), model=model, name="Safety")
+
+        Runner.run_sync(
+            agent,
+            "Return safe.",
+            config=RunConfig(output_guardrails=[allow_safe_output]),
+        )
+        processor.force_flush()
+        guardrail_spans = [
+            item for item in exporter.items()
+            if item["object"] == "trace.span" and item["span_data"]["type"] == "guardrail"
+        ]
+
+        self.assertEqual(len(guardrail_spans), 1)
+        self.assertEqual(guardrail_spans[0]["span_data"]["name"], "allow_safe_output")
+        self.assertEqual(guardrail_spans[0]["span_data"]["stage"], "output")
+        self.assertFalse(guardrail_spans[0]["span_data"]["tripwire_triggered"])
 
     def test_output_guardrail_allows_final_answer(self) -> None:
         @output_guardrail

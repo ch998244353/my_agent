@@ -30,6 +30,7 @@ from .run_steps import (
 )
 from .run_state import RunState, build_run_result
 from .tool_guardrails import ToolGuardrailTripwireTriggered
+from .tracing import agent_span, guardrail_span, task_span, trace, turn_span
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -145,7 +146,12 @@ def _run_input_guardrails(
     guardrails: tuple[InputGuardrail, ...],
 ) -> bool:
     for guardrail in guardrails:
-        result = guardrail.run(agent, task, run_state.context_wrapper)
+        result = _run_input_guardrail_with_tracing(
+            guardrail,
+            agent,
+            task,
+            run_state,
+        )
         _record_input_guardrail_result(run_state, result, step_number)
         if result.output.tripwire_triggered:
             return True
@@ -160,7 +166,12 @@ def _run_output_guardrails(
     guardrails: tuple[OutputGuardrail, ...],
 ) -> bool:
     for guardrail in guardrails:
-        result = guardrail.run(run_state.context_wrapper, agent, output)
+        result = _run_output_guardrail_with_tracing(
+            guardrail,
+            agent,
+            output,
+            run_state,
+        )
         _record_output_guardrail_result(run_state, result, step_number)
         if result.output.tripwire_triggered:
             _clear_final_output(run_state, step_number)
@@ -178,7 +189,63 @@ def _clear_final_output(run_state: RunState, step_number: int) -> None:
     ]
 
 
+def _run_input_guardrail_with_tracing(
+    guardrail: InputGuardrail,
+    agent: Agent,
+    task: str,
+    run_state: RunState,
+) -> InputGuardrailResult:
+    with guardrail_span(guardrail.get_name(), stage="input") as guardrail_span_ctx:
+        result = guardrail.run(agent, task, run_state.context_wrapper)
+        guardrail_span_ctx.record.span_data.data["tripwire_triggered"] = (
+            result.output.tripwire_triggered
+        )
+        return result
+
+
+def _run_output_guardrail_with_tracing(
+    guardrail: OutputGuardrail,
+    agent: Agent,
+    output: object,
+    run_state: RunState,
+) -> OutputGuardrailResult:
+    with guardrail_span(guardrail.get_name(), stage="output") as guardrail_span_ctx:
+        result = guardrail.run(run_state.context_wrapper, agent, output)
+        guardrail_span_ctx.record.span_data.data["tripwire_triggered"] = (
+            result.output.tripwire_triggered
+        )
+        return result
+
+
 def run_agent_loop(
+    agent: Agent,
+    task: str,
+    config: RunConfig | None = None,
+) -> AgentRunResult:
+    workflow_name = (
+        config.workflow_name
+        if config is not None and config.workflow_name is not None
+        else agent.name
+    )
+    trace_metadata = (
+        config.trace_metadata
+        if config is not None and config.trace_metadata is not None
+        else (config.metadata if config is not None else None)
+    )
+    with trace(
+        workflow_name,
+        trace_id=config.trace_id if config is not None else None,
+        group_id=config.group_id if config is not None else None,
+        metadata=trace_metadata,
+        disabled=config.tracing_disabled if config is not None else False,
+        only_if_missing=True,
+    ):
+        with task_span(task):
+            with agent_span(agent.name, task=task):
+                return _run_agent_loop_impl(agent, task, config=config)
+
+
+def _run_agent_loop_impl(
     agent: Agent,
     task: str,
     config: RunConfig | None = None,
@@ -225,125 +292,80 @@ def run_agent_loop(
             )
             break
 
-        turn_input = prepare_turn_input(agent, run_state.context_wrapper)
+        with turn_span(run_state.current_turn + 1, agent.name):
+            turn_input = prepare_turn_input(agent, run_state.context_wrapper)
 
-        try:
-            run_state.record_model_turn()
-            model_turn = run_model_turn(
-                agent,
-                turn_input,
-                run_state,
-                step_number,
-                lifecycle_hooks,
-            )
-            tool_calls = model_turn.tool_calls
-        except Exception as exc:
-            emit_error(lifecycle_hooks, context_wrapper, agent, exc)
-            record_model_error(
-                agent,
-                str(exc),
-                run_state,
-                step_number,
-            )
-            break
-
-
-        # 如果模型直接返回 final answer，run_state.reached_final_answer 会变成 True
-        if run_state.reached_final_answer:
-            if _run_output_guardrails(
-                agent,
-                run_state.final_answer,
-                run_state,
-                step_number,
-                output_guardrails,
-            ):
-                # 触发拦截,清空 final answer , 标记当前没有合法answer ,并退出循环
-                record_run_stopped(
-                    run_state,
-                    step_number,
-                    "output_guardrail_triggered",
-                )
-            break
-
-        if not tool_calls:
-            record_run_stopped(
-                run_state,
-                step_number,
-                "model_returned_no_tool_call",
-            )
-            break
-
-        handoff_happened = False
-        guardrail_happened = False
-        for action in tool_calls:
-            if not run_state.can_execute_tool():
-                break
-
-            step_number = run_state.next_step_number()
-            record_tool_call(run_state, action, step_number)
-
-            handoff_target = agent._handoff_target_for(action)
-            if handoff_target is not None:
-                handoff_outcome = execute_handoff(
+            try:
+                run_state.record_model_turn()
+                model_turn = run_model_turn(
                     agent,
-                    action,
-                    handoff_target,
+                    turn_input,
                     run_state,
                     step_number,
                     lifecycle_hooks,
+                    trace_include_sensitive_data=(
+                        config.trace_include_sensitive_data if config is not None else True
+                    ),
                 )
-                if run_state.reached_final_answer and _run_output_guardrails(
+                tool_calls = model_turn.tool_calls
+            except Exception as exc:
+                emit_error(lifecycle_hooks, context_wrapper, agent, exc)
+                record_model_error(
                     agent,
-                    handoff_outcome.final_answer,
+                    str(exc),
+                    run_state,
+                    step_number,
+                )
+                break
+
+
+            # 如果模型直接返回 final answer，run_state.reached_final_answer 会变成 True
+            if run_state.reached_final_answer:
+                if _run_output_guardrails(
+                    agent,
+                    run_state.final_answer,
                     run_state,
                     step_number,
                     output_guardrails,
                 ):
+                    # 触发拦截,清空 final answer , 标记当前没有合法answer ,并退出循环
                     record_run_stopped(
                         run_state,
                         step_number,
                         "output_guardrail_triggered",
                     )
-                    guardrail_happened = True
-                handoff_happened = True
                 break
 
-            try:
-                tool_outcome = execute_tool_call(
-                    agent,
-                    action,
+            if not tool_calls:
+                record_run_stopped(
                     run_state,
                     step_number,
-                    effective_tool_use_behavior,
-                    lifecycle_hooks,
-                    # 有 output guardrails 时，execute_tool_call 不能直接确认 final_answer。
-                    finalize_output=not output_guardrails,  
+                    "model_returned_no_tool_call",
                 )
-            except ToolGuardrailTripwireTriggered:
-                raise
-            except Exception as exc:
-                emit_error(lifecycle_hooks, context_wrapper, agent, exc)
-                record_tool_error(
-                    agent,
-                    action,
-                    str(exc),
-                    run_state,
-                    step_number,
-                )
-                continue
+                break
 
-            '''
-            tool_outcome.result_value 是候选 final answer
-            先跑 output guardrails
-            如果触发：停止，并且不提交 final_answer
-            如果没触发 record_final_output 正式提交 final_answer
-            '''
-            
-            if tool_outcome.should_stop:
-                if output_guardrails:
-                    if _run_output_guardrails(
+            handoff_happened = False
+            guardrail_happened = False
+            for action in tool_calls:
+                if not run_state.can_execute_tool():
+                    break
+
+                step_number = run_state.next_step_number()
+                record_tool_call(run_state, action, step_number)
+
+                handoff_target = agent._handoff_target_for(action)
+                if handoff_target is not None:
+                    handoff_outcome = execute_handoff(
                         agent,
-                        tool_outcome.result_value,
+                        action,
+                        handoff_target,
+                        run_state,
+                        step_number,
+                        lifecycle_hooks,
+                    )
+                    if run_state.reached_final_answer and _run_output_guardrails(
+                        agent,
+                        handoff_outcome.final_answer,
                         run_state,
                         step_number,
                         output_guardrails,
@@ -354,16 +376,68 @@ def run_agent_loop(
                             "output_guardrail_triggered",
                         )
                         guardrail_happened = True
-                        break
-                    record_final_output(
+                    handoff_happened = True
+                    break
+
+                try:
+                    tool_outcome = execute_tool_call(
+                        agent,
+                        action,
                         run_state,
                         step_number,
-                        tool_outcome.result_value,
+                        effective_tool_use_behavior,
+                        lifecycle_hooks,
+                        # 有 output guardrails 时，execute_tool_call 不能直接确认 final_answer。
+                        finalize_output=not output_guardrails,
+                        trace_include_sensitive_data=(
+                            config.trace_include_sensitive_data if config is not None else True
+                        ),
                     )
-                break
+                except ToolGuardrailTripwireTriggered:
+                    raise
+                except Exception as exc:
+                    emit_error(lifecycle_hooks, context_wrapper, agent, exc)
+                    record_tool_error(
+                        agent,
+                        action,
+                        str(exc),
+                        run_state,
+                        step_number,
+                    )
+                    continue
 
-        if run_state.reached_final_answer or handoff_happened or guardrail_happened:
-            break
+                '''
+                tool_outcome.result_value 是候选 final answer
+                先跑 output guardrails
+                如果触发：停止，并且不提交 final_answer
+                如果没触发 record_final_output 正式提交 final_answer
+                '''
+                
+                if tool_outcome.should_stop:
+                    if output_guardrails:
+                        if _run_output_guardrails(
+                            agent,
+                            tool_outcome.result_value,
+                            run_state,
+                            step_number,
+                            output_guardrails,
+                        ):
+                            record_run_stopped(
+                                run_state,
+                                step_number,
+                                "output_guardrail_triggered",
+                            )
+                            guardrail_happened = True
+                            break
+                        record_final_output(
+                            run_state,
+                            step_number,
+                            tool_outcome.result_value,
+                        )
+                    break
+
+            if run_state.reached_final_answer or handoff_happened or guardrail_happened:
+                break
 
     emit_agent_end(lifecycle_hooks, context_wrapper, agent, run_state.final_answer)
     return build_run_result(run_state)

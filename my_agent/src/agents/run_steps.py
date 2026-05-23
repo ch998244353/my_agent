@@ -32,6 +32,7 @@ from .tool_guardrails import (
     ToolOutputGuardrailTripwireTriggered,
 )
 from .tools import FINAL_ANSWER_TOOL_NAME
+from .tracing import handoff_span, model_span, record_span_error, tool_span
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -188,6 +189,30 @@ def prepare_turn_input(
 
 # 执行一次模型调用，并把 model_response 写入 RunState.new_items
 def run_model_turn(
+    agent: Agent,
+    turn_input: TurnInput,
+    run_state: RunState,
+    step_number: int,
+    hooks: LifecycleHookSequence = (),
+    trace_include_sensitive_data: bool = True,
+) -> ModelTurnResult:
+    model_name = agent.model.__class__.__name__
+    with model_span(
+        model_name,
+        agent=agent.name,
+        step_number=step_number,
+        message_count=len(turn_input.messages),
+        tool_count=len(turn_input.tool_specs),
+        input=turn_input.messages if trace_include_sensitive_data else None,
+    ) as model_span_ctx:
+        try:
+            return _run_model_turn_impl(agent, turn_input, run_state, step_number, hooks)
+        except Exception as exc:
+            record_span_error(model_span_ctx, exc)
+            raise
+
+
+def _run_model_turn_impl(
     agent: Agent,
     turn_input: TurnInput,
     run_state: RunState,
@@ -375,6 +400,41 @@ def execute_tool_call(
     tool_use_behavior: str | dict[str, list[str]],
     hooks: LifecycleHookSequence = (),
     finalize_output: bool = True,
+    trace_include_sensitive_data: bool = True,
+) -> ToolExecutionOutcome:
+    with tool_span(
+        action.tool_name,
+        agent=agent.name,
+        step_number=step_number,
+        call_id=action.call_id,
+        arguments=action.arguments if trace_include_sensitive_data else None,
+    ) as tool_span_ctx:
+        try:
+            outcome = _execute_tool_call_impl(
+                agent,
+                action,
+                run_state,
+                step_number,
+                tool_use_behavior,
+                hooks,
+                finalize_output,
+            )
+        except Exception as exc:
+            record_span_error(tool_span_ctx, exc)
+            raise
+        if trace_include_sensitive_data:
+            tool_span_ctx.record.span_data.data["output"] = outcome.result_value
+        return outcome
+
+
+def _execute_tool_call_impl(
+    agent: Agent,
+    action: ToolCall,
+    run_state: RunState,
+    step_number: int,
+    tool_use_behavior: str | dict[str, list[str]],
+    hooks: LifecycleHookSequence = (),
+    finalize_output: bool = True,
 ) -> ToolExecutionOutcome:
     emit_tool_start(hooks, run_state.context_wrapper, agent, action)
     rejection_metadata: dict[str, Any] = {}
@@ -492,6 +552,37 @@ def execute_handoff(
         task = agent.memory.task or ""
     elif not isinstance(task, str):
         task = str(task)
+    with handoff_span(
+        agent.name,
+        target_agent.name,
+        task=task,
+        call_id=action.call_id,
+    ) as handoff_span_ctx:
+        outcome = _execute_handoff_impl(
+            agent,
+            action,
+            target_agent,
+            task,
+            run_state,
+            step_number,
+            hooks,
+        )
+        handoff_span_ctx.record.span_data.data["final_answer"] = outcome.final_answer
+        handoff_span_ctx.record.span_data.data["reached_final_answer"] = (
+            outcome.reached_final_answer
+        )
+        return outcome
+
+
+def _execute_handoff_impl(
+    agent: Agent,
+    action: ToolCall,
+    target_agent: Agent,
+    task: str,
+    run_state: RunState,
+    step_number: int,
+    hooks: LifecycleHookSequence = (),
+) -> HandoffOutcome:
 
     emit_handoff(hooks, run_state.context_wrapper, agent, target_agent)
     target_result = target_agent.run(task)

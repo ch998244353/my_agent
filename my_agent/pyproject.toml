@@ -1,7 +1,7 @@
 [project]
-name = "mini-smolagent"
+name = "my-agent"
 version = "0.1.0"
-description = "A from-zero teaching project for building a smolagent-style agent."
+description = "A from-zero teaching project for building an Agents SDK-style agent."
 requires-python = ">=3.10"
 dependencies = [
     "openai>=2.31.0",

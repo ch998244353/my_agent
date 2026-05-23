@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sys
 import unittest
@@ -11,7 +11,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from mini_smolagent import (  # noqa: E402
+from agents import (  # noqa: E402
     Agent,
     AgentCapabilities,
     AgentMemory,
@@ -26,6 +26,11 @@ from mini_smolagent import (  # noqa: E402
     ToolCall,
     ToolRegistry,
     ToolSpec,
+)
+from agents.tracing import (  # noqa: E402
+    BatchTraceProcessor,
+    InMemoryTracingExporter,
+    set_trace_processors,
 )
 
 
@@ -99,6 +104,9 @@ def echo_tool() -> FunctionTool:
 
 
 class AgentTestCase(unittest.TestCase):
+    def tearDown(self) -> None:
+        set_trace_processors([])
+
     def test_compatibility_aliases_point_to_agent(self) -> None:
         self.assertIs(MultiStepAgent, Agent)
         self.assertIs(MiniToolCallingAgent, Agent)
@@ -175,6 +183,9 @@ class AgentTestCase(unittest.TestCase):
         self.assertIn("transfer_to_math_agent", tool_names)
 
     def test_agent_handoff_runs_target_agent_as_final_owner(self) -> None:
+        exporter = InMemoryTracingExporter()
+        processor = BatchTraceProcessor(exporter)
+        set_trace_processors([processor])
         specialist = Agent(
             name="Math Agent",
             memory=AgentMemory(),
@@ -200,6 +211,11 @@ class AgentTestCase(unittest.TestCase):
         )
 
         run_result = triage_agent.run("I need math help.")
+        processor.force_flush()
+        handoff_spans = [
+            item for item in exporter.items()
+            if item["object"] == "trace.span" and item["span_data"]["type"] == "handoff"
+        ]
 
         self.assertTrue(run_result.reached_final_answer)
         self.assertEqual(run_result.final_answer, "4")
@@ -209,6 +225,13 @@ class AgentTestCase(unittest.TestCase):
             ["tool_call", "handoff", "final_output"],
         )
         self.assertEqual(run_result.new_items[1].metadata["target_agent"], "Math Agent")
+        self.assertEqual(len(handoff_spans), 1)
+        self.assertEqual(handoff_spans[0]["span_data"]["name"], "Triage Agent -> Math Agent")
+        self.assertEqual(handoff_spans[0]["span_data"]["source_agent"], "Triage Agent")
+        self.assertEqual(handoff_spans[0]["span_data"]["target_agent"], "Math Agent")
+        self.assertEqual(handoff_spans[0]["span_data"]["task"], "Solve 2 + 2.")
+        self.assertEqual(handoff_spans[0]["span_data"]["call_id"], "call_handoff")
+        self.assertEqual(handoff_spans[0]["span_data"]["final_answer"], "4")
 
     def test_agent_executes_multiple_tool_steps(self) -> None:
         registry = ToolRegistry()

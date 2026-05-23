@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sys
 import unittest
@@ -11,7 +11,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from mini_smolagent import (  # noqa: E402
+from agents import (  # noqa: E402
     Agent,
     AgentMemory,
     CodeExecutionResult,
@@ -23,7 +23,7 @@ from mini_smolagent import (  # noqa: E402
     ToolRegistry,
     ToolSpec,
 )
-from mini_smolagent.run_steps import (  # noqa: E402
+from agents.run_steps import (  # noqa: E402
     execute_handoff,
     execute_tool_call,
     interpret_tool_result,

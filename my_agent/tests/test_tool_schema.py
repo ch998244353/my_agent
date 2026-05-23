@@ -4,7 +4,7 @@ import inspect
 import unittest
 from typing import Any, Literal, Optional
 
-from mini_smolagent.tool_schema import annotation_to_json_schema, schema_type_label
+from agents.tool_schema import annotation_to_json_schema, schema_type_label
 
 
 class ToolSchemaTestCase(unittest.TestCase):

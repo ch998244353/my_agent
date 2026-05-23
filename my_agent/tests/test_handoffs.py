@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import sys
 import unittest
@@ -11,8 +11,8 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from mini_smolagent.contracts import ToolCall  # noqa: E402
-from mini_smolagent.handoffs import (  # noqa: E402
+from agents.contracts import ToolCall  # noqa: E402
+from agents.handoffs import (  # noqa: E402
     HANDOFF_TOOL_PREFIX,
     handoff_map,
     handoff_target_for,

@@ -11,7 +11,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from mini_smolagent import (  # noqa: E402
+from agents import (  # noqa: E402
     Agent,
     AgentMemory,
     FunctionTool,
@@ -22,6 +22,11 @@ from mini_smolagent import (  # noqa: E402
     ToolCall,
     ToolRegistry,
     ToolSpec,
+)
+from agents.tracing import (  # noqa: E402
+    BatchTraceProcessor,
+    InMemoryTracingExporter,
+    set_trace_processors,
 )
 
 
@@ -83,6 +88,9 @@ def echo_tool() -> FunctionTool:
 
 
 class RunnerTestCase(unittest.TestCase):
+    def tearDown(self) -> None:
+        set_trace_processors([])
+
     def test_runner_run_sync_executes_agent_loop(self) -> None:
         model = ScriptedModel(
             [
@@ -248,6 +256,195 @@ class RunnerTestCase(unittest.TestCase):
         self.assertTrue(result.reached_final_answer)
         self.assertEqual(result.final_answer, "direct")
         self.assertEqual(result.steps_taken, 1)
+
+    def test_runner_run_sync_creates_trace_and_agent_span(self) -> None:
+        exporter = InMemoryTracingExporter()
+        processor = BatchTraceProcessor(exporter)
+        set_trace_processors([processor])
+        model = ScriptedModel(
+            [
+                ToolCall(
+                    tool_name="final_answer",
+                    arguments={"answer": "traced"},
+                    call_id="call_1",
+                )
+            ]
+        )
+        agent = Agent(memory=AgentMemory(), model=model, name="Planner")
+
+        result = Runner.run_sync(
+            agent,
+            "Trace this run.",
+            config=RunConfig(metadata={"course": "tracing"}),
+        )
+        processor.force_flush()
+        exported = exporter.items()
+
+        self.assertTrue(result.reached_final_answer)
+        self.assertEqual(
+            [item["object"] for item in exported],
+            ["trace.span", "trace.span", "trace.span", "trace.span", "trace.span", "trace"],
+        )
+        self.assertEqual(exported[0]["span_data"]["type"], "generation")
+        self.assertEqual(exported[0]["span_data"]["model"], "ScriptedModel")
+        self.assertEqual(exported[0]["span_data"]["agent"], "Planner")
+        self.assertEqual(exported[0]["span_data"]["model_config"]["message_count"], 1)
+        self.assertEqual(exported[0]["span_data"]["model_config"]["tool_count"], 1)
+        self.assertEqual(exported[1]["span_data"]["type"], "function")
+        self.assertEqual(exported[1]["span_data"]["name"], "final_answer")
+        self.assertEqual(exported[1]["span_data"]["agent"], "Planner")
+        self.assertEqual(exported[1]["span_data"]["input"], {"answer": "traced"})
+        self.assertEqual(exported[1]["span_data"]["arguments"], {"answer": "traced"})
+        self.assertEqual(exported[1]["span_data"]["output"], "traced")
+        self.assertEqual(exported[2]["span_data"]["name"], "turn")
+        self.assertEqual(exported[2]["span_data"]["data"]["turn"], 1)
+        self.assertEqual(exported[2]["span_data"]["data"]["agent_name"], "Planner")
+        self.assertEqual(exported[3]["span_data"]["type"], "agent")
+        self.assertEqual(exported[3]["span_data"]["name"], "Planner")
+        self.assertEqual(exported[3]["span_data"]["task"], "Trace this run.")
+        self.assertEqual(exported[4]["span_data"]["name"], "task")
+        self.assertEqual(exported[4]["span_data"]["data"]["name"], "Trace this run.")
+        self.assertEqual(exported[5]["workflow_name"], "Planner")
+        self.assertEqual(exported[5]["metadata"]["course"], "tracing")
+        self.assertNotIn("spans", exported[5])
+
+    def test_run_config_can_customize_trace_workflow_name(self) -> None:
+        exporter = InMemoryTracingExporter()
+        processor = BatchTraceProcessor(exporter)
+        set_trace_processors([processor])
+        model = ScriptedModel(
+            [ToolCall("final_answer", {"answer": "named trace"}, "call_1")]
+        )
+        agent = Agent(memory=AgentMemory(), model=model, name="Planner")
+
+        Runner.run_sync(
+            agent,
+            "Trace with a logical workflow name.",
+            config=RunConfig(workflow_name="Course workflow"),
+        )
+        processor.force_flush()
+        exported = exporter.items()
+
+        self.assertEqual(exported[-1]["object"], "trace")
+        self.assertEqual(exported[-1]["workflow_name"], "Course workflow")
+        self.assertEqual(exported[-3]["span_data"]["type"], "agent")
+        self.assertEqual(exported[-3]["span_data"]["name"], "Planner")
+        self.assertEqual(exported[-2]["span_data"]["name"], "task")
+
+    def test_run_config_can_disable_tracing_for_single_run(self) -> None:
+        exporter = InMemoryTracingExporter()
+        processor = BatchTraceProcessor(exporter)
+        set_trace_processors([processor])
+        model = ScriptedModel(
+            [ToolCall("final_answer", {"answer": "no trace"}, "call_1")]
+        )
+        agent = Agent(memory=AgentMemory(), model=model, name="Planner")
+
+        result = Runner.run_sync(
+            agent,
+            "Run without tracing.",
+            config=RunConfig(tracing_disabled=True),
+        )
+        processor.force_flush()
+
+        self.assertTrue(result.reached_final_answer)
+        self.assertEqual(exporter.items(), [])
+
+    def test_run_config_can_exclude_sensitive_trace_data(self) -> None:
+        exporter = InMemoryTracingExporter()
+        processor = BatchTraceProcessor(exporter)
+        set_trace_processors([processor])
+        model = ScriptedModel(
+            [ToolCall("final_answer", {"answer": "secret"}, "call_1")]
+        )
+        agent = Agent(memory=AgentMemory(), model=model, name="Planner")
+
+        Runner.run_sync(
+            agent,
+            "User phone is 555-0100.",
+            config=RunConfig(trace_include_sensitive_data=False),
+        )
+        processor.force_flush()
+        exported = exporter.items()
+
+        self.assertIsNone(exported[0]["span_data"]["input"])
+        self.assertIsNone(exported[1]["span_data"]["input"])
+        self.assertIsNone(exported[1]["span_data"]["output"])
+        self.assertNotIn("arguments", exported[1]["span_data"])
+
+    def test_run_config_can_set_trace_identity_and_metadata(self) -> None:
+        exporter = InMemoryTracingExporter()
+        processor = BatchTraceProcessor(exporter)
+        set_trace_processors([processor])
+        model = ScriptedModel(
+            [ToolCall("final_answer", {"answer": "identified trace"}, "call_1")]
+        )
+        agent = Agent(memory=AgentMemory(), model=model, name="Planner")
+
+        Runner.run_sync(
+            agent,
+            "Trace with identity.",
+            config=RunConfig(
+                metadata={"run": "context"},
+                trace_metadata={"trace": "metadata"},
+                trace_id="trace_course_1",
+                group_id="group_course",
+            ),
+        )
+        processor.force_flush()
+        exported_trace = exporter.items()[-1]
+
+        self.assertEqual(exported_trace["object"], "trace")
+        self.assertEqual(exported_trace["id"], "trace_course_1")
+        self.assertEqual(exported_trace["group_id"], "group_course")
+        self.assertEqual(exported_trace["metadata"], {"trace": "metadata"})
+
+    def test_tool_span_records_structured_error_type(self) -> None:
+        def failing_tool() -> str:
+            raise ValueError("boom")
+
+        registry = ToolRegistry()
+        registry.register(
+            FunctionTool(
+                spec=ToolSpec(
+                    name="fail_tool",
+                    description="Always fails.",
+                    arguments=[],
+                    returns="string",
+                ),
+                handler=failing_tool,
+            )
+        )
+        exporter = InMemoryTracingExporter()
+        processor = BatchTraceProcessor(exporter)
+        set_trace_processors([processor])
+        model = ScriptedModel(
+            [
+                ToolCall("fail_tool", {}, "call_fail"),
+                ToolCall("final_answer", {"answer": "recovered"}, "call_done"),
+            ]
+        )
+        agent = Agent(memory=AgentMemory(), model=model, tool_registry=registry, name="Repair")
+
+        result = Runner.run_sync(agent, "Recover from a tool error.")
+        processor.force_flush()
+        tool_spans = [
+            item for item in exporter.items()
+            if item["object"] == "trace.span" and item["span_data"]["type"] == "function"
+        ]
+
+        self.assertTrue(result.reached_final_answer)
+        self.assertEqual(tool_spans[0]["span_data"]["name"], "fail_tool")
+        self.assertEqual(tool_spans[0]["span_data"]["error_type"], "ToolExecutionError")
+        self.assertEqual(tool_spans[0]["span_data"]["error_cause_type"], "ValueError")
+        self.assertIn("boom", tool_spans[0]["error"]["message"])
+        self.assertEqual(
+            tool_spans[0]["error"]["data"],
+            {
+                "error_type": "ToolExecutionError",
+                "error_cause_type": "ValueError",
+            },
+        )
 
 
 if __name__ == "__main__":

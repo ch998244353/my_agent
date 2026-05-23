@@ -11,15 +11,15 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from mini_smolagent.agent import Agent  # noqa: E402
-from mini_smolagent.contracts import ModelResponse, ToolCall  # noqa: E402
-from mini_smolagent.memory import AgentMemory  # noqa: E402
-from mini_smolagent.run_state import RunState, build_run_result  # noqa: E402
-from mini_smolagent.run_steps import execute_tool_call, prepare_turn_input  # noqa: E402
-from mini_smolagent.tools import function_tool  # noqa: E402
-from mini_smolagent.tools import ToolRegistry  # noqa: E402
-from mini_smolagent.run_context import RunContextWrapper  # noqa: E402
-from mini_smolagent.tool_guardrails import (  # noqa: E402
+from agents.agent import Agent  # noqa: E402
+from agents.contracts import ModelResponse, ToolCall  # noqa: E402
+from agents.memory import AgentMemory  # noqa: E402
+from agents.run_state import RunState, build_run_result  # noqa: E402
+from agents.run_steps import execute_tool_call, prepare_turn_input  # noqa: E402
+from agents.tools import function_tool  # noqa: E402
+from agents.tools import ToolRegistry  # noqa: E402
+from agents.run_context import RunContextWrapper  # noqa: E402
+from agents.tool_guardrails import (  # noqa: E402
     ToolGuardrailFunctionOutput,
     ToolInputGuardrailTripwireTriggered,
     ToolOutputGuardrailTripwireTriggered,
@@ -86,10 +86,10 @@ class ToolGuardrailsTestCase(unittest.TestCase):
         self.assertEqual(lookup.tool_output_guardrails, [check_output])
 
     def test_tool_guardrail_api_is_public(self) -> None:
-        import mini_smolagent
+        import agents
 
-        self.assertIs(mini_smolagent.tool_input_guardrail, tool_input_guardrail)
-        self.assertIs(mini_smolagent.tool_output_guardrail, tool_output_guardrail)
+        self.assertIs(agents.tool_input_guardrail, tool_input_guardrail)
+        self.assertIs(agents.tool_output_guardrail, tool_output_guardrail)
 
     def test_execute_tool_call_rejects_input_before_handler(self) -> None:
         class RecordingModel:
