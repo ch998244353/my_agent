@@ -5,8 +5,9 @@ from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from .contracts import AgentRunResult, ToolArgument, ToolSpec
+from .contracts import ToolArgument, ToolSpec
 from .memory import AgentMemory
+from .result import RunResult
 from .run_config import RunConfig
 from .tools import FunctionTool, ToolEnabled, ToolExecutionError
 
@@ -14,7 +15,7 @@ if TYPE_CHECKING:
     from .agent import Agent
 
 
-AgentToolOutputExtractor = Callable[[AgentRunResult], object] # Agent 运行结果中取工具输出
+AgentToolOutputExtractor = Callable[[RunResult], object] # Agent 运行结果中取工具输出
 AgentMemoryFactory = Callable[[], AgentMemory] # 如何为工具调用创建新的 memory 
 
 
@@ -36,7 +37,7 @@ def _default_agent_tool_description(agent: Agent) -> str:
 
 
 # 默认输出提取函数
-def _default_output_extractor(agent: Agent, result: AgentRunResult) -> object:
+def _default_output_extractor(agent: Agent, result: RunResult) -> object:
     if not result.reached_final_answer:
         raise AgentToolError(agent.name, "child agent did not reach a final answer.")
     return result.final_answer

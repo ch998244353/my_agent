@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .contracts import AgentRunResult, ModelResponse, RunItem
+from .contracts import ModelResponse, RunItem
 from .guardrails import InputGuardrailResult, OutputGuardrailResult
+from .result import RunResult
 from .run_context import RunContextWrapper
 from .tool_guardrails import ToolInputGuardrailResult, ToolOutputGuardrailResult
+
+if TYPE_CHECKING:
+    from .agent import Agent
 
 # 保存一次 agent run 的过程状态
 @dataclass
 class RunState:
     new_items: list[RunItem] = field(default_factory=list)
+    input: Any | None = None
+    last_agent: Agent | None = None
     final_answer: Any | None = None
     reached_final_answer: bool = False
     current_turn: int = 0
@@ -54,10 +60,10 @@ def raw_responses_from_items(items: tuple[RunItem, ...]) -> tuple[ModelResponse,
         and isinstance(item.payload, ModelResponse)
     )
 
-# 统一把 RunState 转成最终返回的 AgentRunResult
-def build_run_result(run_state: RunState) -> AgentRunResult:
+# 统一把 RunState 转成最终返回的 RunResult
+def build_run_result(run_state: RunState) -> RunResult:
     new_items = tuple(run_state.new_items)
-    return AgentRunResult(
+    return RunResult(
         final_answer=run_state.final_answer,
         step_results=step_results_from_items(new_items),
         reached_final_answer=run_state.reached_final_answer,
@@ -65,6 +71,8 @@ def build_run_result(run_state: RunState) -> AgentRunResult:
         max_turns=run_state.max_turns,
         steps_taken=run_state.steps_taken,
         max_steps=run_state.max_steps,
+        input=run_state.input,
+        last_agent=run_state.last_agent,
         context_wrapper=run_state.context_wrapper,
         input_guardrail_results=tuple(run_state.input_guardrail_results),
         output_guardrail_results=tuple(run_state.output_guardrail_results),

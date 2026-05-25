@@ -108,6 +108,8 @@ class RunnerTestCase(unittest.TestCase):
         self.assertTrue(result.reached_final_answer)
         self.assertEqual(result.final_answer, "runner finished")
         self.assertEqual(result.steps_taken, 1)
+        self.assertEqual(result.input, "Finish through Runner.")
+        self.assertIs(result.last_agent, agent)
         self.assertEqual(model.last_messages[0].content, "Finish through Runner.")
 
     def test_runner_run_sync_uses_runtime_loop_not_agent_private_run(self) -> None:

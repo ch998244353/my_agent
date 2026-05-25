@@ -219,6 +219,8 @@ class AgentTestCase(unittest.TestCase):
 
         self.assertTrue(run_result.reached_final_answer)
         self.assertEqual(run_result.final_answer, "4")
+        self.assertEqual(run_result.input, "I need math help.")
+        self.assertIs(run_result.last_agent, specialist)
         self.assertEqual(specialist.memory.task, "Solve 2 + 2.")
         self.assertEqual(
             [item.item_type for item in run_result.new_items],

@@ -5,7 +5,6 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .contracts import (
-    AgentRunResult,
     ChatMessage,
     ToolCall,
     ToolSpec,
@@ -23,6 +22,7 @@ from .python_executor import (
 )
 from .run_config import RunConfig
 from .run_context import RunContextWrapper
+from .result import RunResult
 from .tools import (
     FINAL_ANSWER_TOOL_NAME,
     FunctionTool,
@@ -79,7 +79,7 @@ class Agent:
         *,
         tool_name: str | None = None,
         tool_description: str | None = None,
-        output_extractor: Callable[[AgentRunResult], object] | None = None,
+        output_extractor: Callable[[RunResult], object] | None = None,
         memory_factory: Callable[[], AgentMemory] = AgentMemory,
         is_enabled: ToolEnabled = True,
         run_config: RunConfig | None = None,
@@ -195,7 +195,7 @@ class Agent:
         self,
         task: str,
         config: RunConfig | None = None,
-    ) -> AgentRunResult:
+    ) -> RunResult:
         from .runner import Runner
         return Runner.run_sync(self, task, config=config)
 
@@ -203,7 +203,7 @@ class Agent:
         self,
         task: str,
         config: RunConfig | None = None,
-    ) -> AgentRunResult:
+    ) -> RunResult:
         from .run_loop import run_agent_loop
 
         return run_agent_loop(self, task, config=config)

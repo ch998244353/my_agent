@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .contracts import AgentRunResult, RunItem
+from .contracts import RunItem
 from .guardrails import (
     InputGuardrail,
     InputGuardrailResult,
@@ -17,6 +17,7 @@ from .lifecycle import (
 )
 from .run_config import RunConfig
 from .run_context import RunContextWrapper
+from .result import RunResult
 from .run_steps import (
     execute_handoff,
     execute_tool_call,
@@ -221,7 +222,7 @@ def run_agent_loop(
     agent: Agent,
     task: str,
     config: RunConfig | None = None,
-) -> AgentRunResult:
+) -> RunResult:
     workflow_name = (
         config.workflow_name
         if config is not None and config.workflow_name is not None
@@ -249,7 +250,7 @@ def _run_agent_loop_impl(
     agent: Agent,
     task: str,
     config: RunConfig | None = None,
-) -> AgentRunResult:
+) -> RunResult:
     agent.memory.add_task(task)
     effective_max_steps = _resolve_max_steps(agent, config)
     effective_max_turns = _resolve_max_turns(config)
@@ -259,6 +260,8 @@ def _run_agent_loop_impl(
     input_guardrails = _collect_input_guardrails(agent, config)
     output_guardrails = _collect_output_guardrails(agent, config)
     run_state = RunState(
+        input=task,
+        last_agent=agent,
         max_steps=effective_max_steps,
         max_turns=effective_max_turns,
         context_wrapper=context_wrapper,
@@ -363,6 +366,8 @@ def _run_agent_loop_impl(
                         step_number,
                         lifecycle_hooks,
                     )
+                    if handoff_outcome.reached_final_answer:
+                        run_state.last_agent = handoff_target
                     if run_state.reached_final_answer and _run_output_guardrails(
                         agent,
                         handoff_outcome.final_answer,

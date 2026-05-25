@@ -4,6 +4,7 @@ import importlib
 import sys
 import unittest
 from pathlib import Path
+from typing import get_type_hints
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +14,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import agents  # noqa: E402
+from agents.run_loop import _run_agent_loop_impl, run_agent_loop  # noqa: E402
 
 
 class PublicApiTestCase(unittest.TestCase):
@@ -48,6 +50,8 @@ class PublicApiTestCase(unittest.TestCase):
             "RunState",
             "Runner",
             "StepRecord",
+            "RunResult",
+            "RunResultBase",
             "StructuredOutputError",
             "ToolArgument",
             "ToolCall",
@@ -119,6 +123,7 @@ class PublicApiTestCase(unittest.TestCase):
             "agents.run_config",
             "agents.run_context",
             "agents.run_loop",
+            "agents.result",
             "agents.run_state",
             "agents.run_steps",
             "agents.runner",
@@ -128,6 +133,37 @@ class PublicApiTestCase(unittest.TestCase):
         for module_name in module_names:
             with self.subTest(module_name=module_name):
                 self.assertIsNotNone(importlib.import_module(module_name))
+
+    def test_run_result_api_is_public_with_legacy_result_available(self) -> None:
+        self.assertTrue(hasattr(agents, "AgentRunResult"))
+        self.assertTrue(hasattr(agents, "RunResult"))
+        self.assertTrue(hasattr(agents, "RunResultBase"))
+        self.assertTrue(issubclass(agents.RunResult, agents.RunResultBase))
+
+    def test_run_entrypoints_are_annotated_with_run_result(self) -> None:
+        runner_globals = {
+            **agents.Runner.run_sync.__globals__,
+            "Agent": agents.Agent,
+        }
+        loop_globals = {
+            **run_agent_loop.__globals__,
+            "Agent": agents.Agent,
+        }
+
+        self.assertIs(
+            get_type_hints(agents.Runner.run_sync, globalns=runner_globals)["return"],
+            agents.RunResult,
+        )
+        self.assertIs(get_type_hints(agents.Agent.run)["return"], agents.RunResult)
+        self.assertIs(get_type_hints(agents.Agent._run)["return"], agents.RunResult)
+        self.assertIs(
+            get_type_hints(run_agent_loop, globalns=loop_globals)["return"],
+            agents.RunResult,
+        )
+        self.assertIs(
+            get_type_hints(_run_agent_loop_impl, globalns=loop_globals)["return"],
+            agents.RunResult,
+        )
 
 
 if __name__ == "__main__":

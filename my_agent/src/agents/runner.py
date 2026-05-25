@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .contracts import AgentRunResult
+from .result import RunResult
 from .run_config import RunConfig
 from .run_loop import run_agent_loop
 
@@ -17,5 +17,5 @@ class Runner:
         agent: Agent,
         task: str,
         config: RunConfig | None = None,
-    ) -> AgentRunResult:
+    ) -> RunResult:
         return run_agent_loop(agent, task, config=config)

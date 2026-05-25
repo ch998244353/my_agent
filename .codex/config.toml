@@ -1,0 +1,12 @@
+[mcp_servers.codegraph]
+command = 'C:\Program Files\nodejs\node.exe'
+args = [
+  'C:\Users\ch\AppData\Roaming\npm\node_modules\@colbymchenry\codegraph\npm-shim.js',
+  'serve',
+  '--mcp',
+  '--path',
+  'C:\Users\ch\Desktop\ai agent学习',
+]
+cwd = 'C:\Users\ch\Desktop\ai agent学习'
+startup_timeout_sec = 30
+tool_timeout_sec = 60

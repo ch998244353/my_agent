@@ -12,7 +12,8 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from agents import ModelResponse, RunItem, RunState, ToolCall  # noqa: E402
+from agents import Agent, AgentMemory, ModelResponse, RunItem, RunState, ToolCall  # noqa: E402
+from agents.result import RunResult  # noqa: E402
 from agents.run_state import build_run_result  # noqa: E402
 
 
@@ -22,6 +23,8 @@ class RunStateTestCase(unittest.TestCase):
 
         self.assertIn("new_items", run_state_fields)
         self.assertIn("handoff_depth", run_state_fields)
+        self.assertIn("input", run_state_fields)
+        self.assertIn("last_agent", run_state_fields)
         self.assertIn("current_turn", run_state_fields)
         self.assertIn("max_turns", run_state_fields)
         self.assertIn("max_steps", run_state_fields)
@@ -91,6 +94,21 @@ class RunStateTestCase(unittest.TestCase):
         self.assertEqual(result.max_turns, 4)
         self.assertEqual(result.max_steps, 5)
         self.assertEqual(result.steps_taken, 1)
+
+    def test_build_run_result_returns_run_result_with_continuation_state(self) -> None:
+        agent = Agent(memory=AgentMemory(), model=object(), name="Planner")
+        run_state = RunState(
+            input="Plan next step.",
+            last_agent=agent,
+            final_answer="ready",
+            reached_final_answer=True,
+        )
+
+        result = build_run_result(run_state)
+
+        self.assertIsInstance(result, RunResult)
+        self.assertEqual(result.input, "Plan next step.")
+        self.assertIs(result.last_agent, agent)
 
 
 if __name__ == "__main__":

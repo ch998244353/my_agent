@@ -40,6 +40,7 @@ from .python_executor import (
     MiniPythonExecutor,
     create_python_executor_tool,
 )
+from .result import RunResult, RunResultBase
 from .runner import Runner
 from .run_config import RunConfig
 from .run_context import RunContextWrapper
@@ -131,6 +132,8 @@ __all__ = [
     "RunConfig",
     "RunContextWrapper",
     "RunItem",
+    "RunResult",
+    "RunResultBase",
     "RunState",
     "Span",
     "SpanData",
