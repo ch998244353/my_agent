@@ -18,8 +18,10 @@ from agents import (  # noqa: E402
     FunctionTool,
     ModelResponse,
     ModelSettings,
+    RunConfig,
     ToolCall,
 )
+import agents.run_config as run_config_module  # noqa: E402
 
 
 class RecordingModel:
@@ -57,7 +59,39 @@ class SchemaAwareModel(RecordingModel):
         )
 
 
+class ListSession:
+    def __init__(self) -> None:
+        self.items: list[ChatMessage] = []
+
+    def get_items(self, limit: int | None = None) -> list[ChatMessage]:
+        if limit is None:
+            return list(self.items)
+        return self.items[-limit:]
+
+    def add_items(self, items: list[ChatMessage]) -> None:
+        self.items.extend(items)
+
+    def pop_item(self) -> ChatMessage | None:
+        return self.items.pop() if self.items else None
+
+    def clear_session(self) -> None:
+        self.items.clear()
+
+
 class AgentConfigurationTestCase(unittest.TestCase):
+    def test_run_config_accepts_session_entry(self) -> None:
+        self.assertIn("session", RunConfig.__dataclass_fields__)
+        self.assertTrue(hasattr(run_config_module, "SessionLike"))
+        for method_name in ("get_items", "add_items", "pop_item", "clear_session"):
+            self.assertTrue(hasattr(run_config_module.SessionLike, method_name))
+
+        session = ListSession()
+
+        config = RunConfig(session=session)
+
+        self.assertIs(config.session, session)
+        self.assertIsNone(RunConfig().session)
+
     def test_agent_has_sdk_style_default_configuration(self) -> None:
         agent = Agent(memory=AgentMemory(), model=RecordingModel())
 

@@ -1,16 +1,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 from .guardrails import InputGuardrail, OutputGuardrail
 from .lifecycle import LifecycleHooks
 from .model_settings import ModelSettings
 
 
+class SessionLike(Protocol):
+    def get_items(self, limit: int | None = None) -> list[Any]:
+        ...
+
+    def add_items(self, items: list[Any]) -> None:
+        ...
+
+    def pop_item(self) -> Any | None:
+        ...
+
+    def clear_session(self) -> None:
+        ...
+
+
 @dataclass(frozen=True)
 class RunConfig:
     context: Any | None = None
+    session: SessionLike | None = None
     metadata: dict[str, Any] | None = None  # 本次运行上下文 的附加信息，会进入 RunContextWrapper
     tracing_disabled: bool = False
     trace_include_sensitive_data: bool = True

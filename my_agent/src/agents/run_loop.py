@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .contracts import RunItem
+from .contracts import ChatMessage, RunItem
 from .guardrails import (
     InputGuardrail,
     InputGuardrailResult,
@@ -15,10 +15,12 @@ from .lifecycle import (
     emit_agent_start,
     emit_error,
 )
+from .memory import session_item_to_message, session_items_from_result
 from .run_config import RunConfig
 from .run_context import RunContextWrapper
 from .result import RunResult
 from .run_steps import (
+    TurnInput,
     execute_handoff,
     execute_tool_call,
     prepare_turn_input,
@@ -56,6 +58,42 @@ def _resolve_tool_use_behavior(
     if config is not None and config.tool_use_behavior is not None:
         return config.tool_use_behavior
     return agent.tool_use_behavior
+
+
+def _session_messages(config: RunConfig | None) -> list[ChatMessage]:
+    if config is None or config.session is None:
+        return []
+    return [
+        session_item_to_message(item)
+        for item in config.session.get_items()
+    ]
+
+
+def _prepend_session_messages(
+    turn_input: TurnInput,
+    session_messages: list[ChatMessage],
+) -> TurnInput:
+    if not session_messages:
+        return turn_input
+    return TurnInput(
+        messages=[*session_messages, *turn_input.messages],
+        tool_specs=turn_input.tool_specs,
+    )
+
+# 把 RunResult.to_input_list() 生成的历史消息交给 session 保存
+def _save_result_to_session(config: RunConfig | None, result: RunResult) -> None:
+    if config is None or config.session is None:
+        return
+    config.session.add_items(session_items_from_result(result))
+
+
+def _build_result_and_save_session(
+    config: RunConfig | None,
+    run_state: RunState,
+) -> RunResult:
+    result = build_run_result(run_state)
+    _save_result_to_session(config, result)
+    return result
 
 
 def _create_run_context(config: RunConfig | None) -> RunContextWrapper:
@@ -276,8 +314,9 @@ def _run_agent_loop_impl(
     if _run_input_guardrails(agent, task, run_state, step_number, input_guardrails):
         record_run_stopped(run_state, step_number, "input_guardrail_triggered")
         emit_agent_end(lifecycle_hooks, context_wrapper, agent, run_state.final_answer)
-        return build_run_result(run_state)
+        return _build_result_and_save_session(config, run_state)
 
+    session_messages = _session_messages(config)
     while True:
         step_number = run_state.next_step_number()
         if not run_state.can_execute_tool():
@@ -297,6 +336,7 @@ def _run_agent_loop_impl(
 
         with turn_span(run_state.current_turn + 1, agent.name):
             turn_input = prepare_turn_input(agent, run_state.context_wrapper)
+            turn_input = _prepend_session_messages(turn_input, session_messages)
 
             try:
                 run_state.record_model_turn()
@@ -445,4 +485,4 @@ def _run_agent_loop_impl(
                 break
 
     emit_agent_end(lifecycle_hooks, context_wrapper, agent, run_state.final_answer)
-    return build_run_result(run_state)
+    return _build_result_and_save_session(config, run_state)

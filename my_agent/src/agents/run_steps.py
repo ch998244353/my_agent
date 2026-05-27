@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .contracts import (
     ChatMessage,
@@ -36,6 +36,10 @@ from .tracing import handoff_span, model_span, record_span_error, tool_span
 
 if TYPE_CHECKING:
     from .agent import Agent
+
+
+def _message_to_trace_dict(message: ChatMessage) -> dict[str, Any]:
+    return {"role": message.role, "content": message.content}
 
 
 # “这一轮要发给模型的输入”，包括消息和工具说明
@@ -203,7 +207,11 @@ def run_model_turn(
         step_number=step_number,
         message_count=len(turn_input.messages),
         tool_count=len(turn_input.tool_specs),
-        input=turn_input.messages if trace_include_sensitive_data else None,
+        input=(
+            [_message_to_trace_dict(message) for message in turn_input.messages]
+            if trace_include_sensitive_data
+            else None
+        ),
     ) as model_span_ctx:
         try:
             return _run_model_turn_impl(agent, turn_input, run_state, step_number, hooks)
@@ -222,7 +230,10 @@ def _run_model_turn_impl(
     emit_llm_start(hooks, run_state.context_wrapper, agent, turn_input)
     get_response = getattr(agent.model, "get_response", None)
     if callable(get_response):
-        model_response = get_response(turn_input.messages, turn_input.tool_specs)
+        model_response = cast(
+            ModelResponse,
+            get_response(turn_input.messages, turn_input.tool_specs),
+        )
         emit_llm_end(hooks, run_state.context_wrapper, agent, model_response)
         run_state.new_items.append(
             RunItem(
@@ -517,7 +528,7 @@ def _execute_tool_call_impl(
             is_final_answer=result_info.should_stop,
         )
     )
- 
+
     if result_info.should_stop and finalize_output:
         record_final_output(run_state, step_number, result_info.result_value)
 

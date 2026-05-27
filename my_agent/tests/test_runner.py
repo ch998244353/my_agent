@@ -14,10 +14,12 @@ if str(SRC_DIR) not in sys.path:
 from agents import (  # noqa: E402
     Agent,
     AgentMemory,
+    AgentSession,
     FunctionTool,
     ModelResponse,
     RunConfig,
     Runner,
+    StepRecord,
     ToolArgument,
     ToolCall,
     ToolRegistry,
@@ -34,11 +36,13 @@ class ScriptedModel:
     def __init__(self, actions) -> None:
         self.actions = list(actions)
         self.last_messages = []
+        self.message_batches = []
         self.last_tool_specs = []
         self._index = 0
 
     def decide(self, messages, tool_specs):
         self.last_messages = list(messages)
+        self.message_batches.append(list(messages))
         self.last_tool_specs = list(tool_specs)
         if self._index >= len(self.actions):
             return None
@@ -200,6 +204,97 @@ class RunnerTestCase(unittest.TestCase):
         self.assertEqual(model._index, 1)
         self.assertEqual(result.new_items[-1].item_type, "run_stopped")
         self.assertEqual(result.new_items[-1].payload, "max_turns_reached")
+
+    def test_runner_run_sync_prepends_run_config_session_history(self) -> None:
+        session = AgentSession()
+        session.add_task("My name is Ada.")
+        model = ScriptedModel(
+            [
+                ToolCall(
+                    tool_name="final_answer",
+                    arguments={"answer": "Your name is Ada."},
+                    call_id="call_1",
+                )
+            ]
+        )
+        agent = Agent(memory=AgentMemory(), model=model)
+
+        Runner.run_sync(
+            agent,
+            "What is my name?",
+            config=RunConfig(session=session),
+        )
+
+        self.assertEqual(
+            [message.content for message in model.last_messages],
+            ["My name is Ada.", "What is my name?"],
+        )
+        self.assertEqual(
+            [message.role for message in session.replay()],
+            ["user", "user", "tool_call", "tool_response", "assistant"],
+        )
+        self.assertEqual(
+            [message.content for message in session.replay()],
+            [
+                "My name is Ada.",
+                "What is my name?",
+                "call_1: final_answer(answer='Your name is Ada.')",
+                "Your name is Ada.",
+                "Your name is Ada.",
+            ],
+        )
+
+    def test_runner_uses_compacted_session_context_once_per_run(self) -> None:
+        class CountingSession:
+            def __init__(self, inner: AgentSession) -> None:
+                self.inner = inner
+                self.get_items_count = 0
+
+            def get_items(self, limit=None):
+                self.get_items_count += 1
+                return self.inner.get_items(limit=limit)
+
+            def add_items(self, items):
+                self.inner.add_items(items)
+
+            def pop_item(self):
+                return self.inner.pop_item()
+
+            def clear_session(self) -> None:
+                self.inner.clear_session()
+
+        long_observation = "old raw observation detail " * 40
+        inner = AgentSession(compact_after_turns=1, compact_keep_turns=1)
+        inner.add_task("Old raw project question?")
+        inner.add_step(StepRecord(step_number=1, observation=long_observation))
+        inner.add_task("Recent project question?")
+        inner.add_step(StepRecord(step_number=2, observation="recent project answer"))
+        session = CountingSession(inner)
+        registry = ToolRegistry()
+        registry.register(echo_tool())
+        model = ScriptedModel(
+            [
+                ToolCall("echo_text", {"text": "tool round"}, "call_1"),
+                ToolCall("final_answer", {"answer": "done"}, "call_2"),
+            ]
+        )
+        agent = Agent(memory=AgentMemory(), model=model, tool_registry=registry)
+
+        Runner.run_sync(
+            agent,
+            "Use the remembered context.",
+            config=RunConfig(session=session),
+        )
+
+        first_batch = model.message_batches[0]
+        first_contents = [message.content for message in first_batch]
+        self.assertEqual(session.get_items_count, 1)
+        self.assertEqual(first_batch[0].role, "system")
+        self.assertIn("Conversation summary:", first_batch[0].content)
+        self.assertIn("Recent project question?", first_contents)
+        self.assertEqual(first_batch[-1].content, "Use the remembered context.")
+        self.assertNotIn(long_observation, "\n".join(first_contents))
+        self.assertEqual(session.inner.replay()[0].role, "system")
 
     def test_current_turn_counts_one_model_response_with_multiple_tools_once(self) -> None:
         registry = ToolRegistry()

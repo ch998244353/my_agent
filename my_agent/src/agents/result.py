@@ -66,7 +66,7 @@ class RunResultBase:
     
 
 
-    #  input、tool_call、tool_result、final_output 转成 ChatMessage 列表
+    #  input、tool_call、tool_result、final_output 转成 ChatMessage             列表
     def to_input_list(self, mode: str = "preserve_all") -> list[ChatMessage]:
         messages: list[ChatMessage] = []
         if self.input is not None:

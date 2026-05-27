@@ -25,7 +25,17 @@ from .guardrails import (
     output_guardrail,
 )
 from .lifecycle import LifecycleHooks
-from .memory import AgentMemory, AgentSession
+from .memory import (
+    AgentMemory,
+    AgentSession,
+    CompactionPolicy,
+    JsonSession,
+    MemoryCompressor,
+    MemorySummarizer,
+    MemorySummary,
+    ModelSummarizer,
+    RuleBasedSummarizer,
+)
 from .model_settings import ModelSettings
 from .models import (
     OpenAIResponsesModel,
@@ -112,6 +122,7 @@ __all__ = [
     "ChatMessage",
     "CodeExecutionError",
     "CodeExecutionResult",
+    "CompactionPolicy",
     "FINAL_ANSWER_TOOL_NAME",
     "FunctionTool",
     "GuardrailFunctionOutput",
@@ -119,6 +130,10 @@ __all__ = [
     "InputGuardrailResult",
     "LifecycleHooks",
     "MessageRole",
+    "MemoryCompressor",
+    "MemorySummarizer",
+    "MemorySummary",
+    "ModelSummarizer",
     "MiniCodeAgent",
     "MiniPythonExecutor",
     "MiniToolCallingAgent",
@@ -135,6 +150,7 @@ __all__ = [
     "RunResult",
     "RunResultBase",
     "RunState",
+    "RuleBasedSummarizer",
     "Span",
     "SpanData",
     "SpanError",
@@ -164,6 +180,7 @@ __all__ = [
     "InMemoryTracingExporter",
     "InMemoryTracingProcessor",
     "JSONLTracingExporter",
+    "JsonSession",
     "SynchronousMultiTracingProcessor",
     "add_trace_processor",
     "agent_span",
