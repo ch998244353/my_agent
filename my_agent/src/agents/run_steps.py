@@ -56,6 +56,16 @@ class ModelTurnResult:
     tool_calls: list[ToolCall]
 
 
+@dataclass(frozen=True)
+class ProcessedResponse:
+    model_turn: ModelTurnResult
+    model_response: ModelResponse | None
+    tool_calls: list[ToolCall]
+    handoff_calls: list[ToolCall]
+    final_output: Any | None = None
+    has_final_output: bool = False
+
+
 # 给“工具执行结果”和“handoff 执行结果”一个稳定返回结构
 @dataclass(frozen=True)
 class ToolExecutionOutcome:
@@ -75,6 +85,134 @@ class HandoffOutcome:
     task: str
     final_answer: Any | None
     reached_final_answer: bool
+
+
+# 状态机下一步：得到最终输出，主循环可以结束。
+@dataclass(frozen=True)
+class NextStepFinalOutput:
+    final_output: Any | None
+
+
+# 状态机下一步：工具结果已经写回模型上下文，主循环需要再次调用模型。
+@dataclass(frozen=True)
+class NextStepRunAgain:
+    reason: str = "tool_results"
+
+
+# 状态机下一步：发生 handoff，主循环应切换或委托给目标 agent。
+@dataclass(frozen=True)
+class NextStepHandoff:
+    target_agent: Agent
+
+
+# 状态机下一步：没有后续动作，主循环记录停止原因后结束。
+@dataclass(frozen=True)
+class NextStepStopped:
+    reason: str
+
+
+NextStep = NextStepFinalOutput | NextStepRunAgain | NextStepHandoff | NextStepStopped
+
+
+MODEL_RETURNED_NO_TOOL_CALL = "model_returned_no_tool_call"
+
+
+@dataclass(frozen=True)
+class SingleStepResult:
+    model_turn: ModelTurnResult | None
+    next_step: NextStep
+    generated_items: tuple[RunItem, ...] = ()
+
+
+# 处理出 processed response 模型一次分类后的返回结果
+def process_model_turn(
+    agent: Agent,
+    model_turn: ModelTurnResult,
+    run_state: RunState,
+) -> ProcessedResponse:
+    tool_calls: list[ToolCall] = []
+    handoff_calls: list[ToolCall] = []
+    for tool_call in model_turn.tool_calls:
+        if agent._handoff_target_for(tool_call) is not None:
+            handoff_calls.append(tool_call)
+        else:
+            tool_calls.append(tool_call)
+    return ProcessedResponse(
+        model_turn=model_turn,
+        model_response=model_turn.response,
+        tool_calls=tool_calls,
+        handoff_calls=handoff_calls,
+        final_output=run_state.final_answer if run_state.reached_final_answer else None,
+        has_final_output=run_state.reached_final_answer,
+    )
+
+
+# 根据 ProcessedResponse.has_final_output 决定是否返回最终输出步骤
+def resolve_final_output_step(
+    processed_response: ProcessedResponse,
+) -> SingleStepResult | None:
+    if not processed_response.has_final_output:
+        return None
+    return SingleStepResult(
+        model_turn=processed_response.model_turn,
+        next_step=NextStepFinalOutput(processed_response.final_output),
+    )
+
+
+def resolve_no_tool_call_step(
+    processed_response: ProcessedResponse,
+) -> SingleStepResult | None:
+    if processed_response.has_final_output:
+        return None
+    if processed_response.tool_calls or processed_response.handoff_calls:
+        return None
+    return SingleStepResult(
+        model_turn=processed_response.model_turn,
+        next_step=NextStepStopped(MODEL_RETURNED_NO_TOOL_CALL),
+    )
+
+
+def resolve_model_response_step(
+    processed_response: ProcessedResponse,
+) -> SingleStepResult | None:
+    return resolve_final_output_step(processed_response) or resolve_no_tool_call_step(
+        processed_response
+    )
+
+
+def resolve_tool_final_output_step(
+    model_turn: ModelTurnResult,
+    tool_outcome: ToolExecutionOutcome,
+) -> SingleStepResult | None:
+    if not tool_outcome.should_stop:
+        return None
+    return SingleStepResult(
+        model_turn=model_turn,
+        next_step=NextStepFinalOutput(tool_outcome.result_value),
+    )
+
+
+def resolve_handoff_step(
+    model_turn: ModelTurnResult,
+    handoff_outcome: HandoffOutcome,
+    target_agent: Agent,
+) -> SingleStepResult:
+    return SingleStepResult(
+        model_turn=model_turn,
+        next_step=NextStepHandoff(target_agent),
+    )
+
+
+def resolve_tool_run_again_step(
+    model_turn: ModelTurnResult,
+    tool_outcome: ToolExecutionOutcome,
+) -> SingleStepResult | None:
+    if tool_outcome.should_stop:
+        return None
+    return SingleStepResult(
+        model_turn=model_turn,
+        next_step=NextStepRunAgain(),
+    )
 
 
 # 把一次工具执行结果解释成稳定结构

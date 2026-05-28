@@ -20,15 +20,24 @@ from .run_config import RunConfig
 from .run_context import RunContextWrapper
 from .result import RunResult
 from .run_steps import (
+    NextStepFinalOutput,
+    NextStepHandoff,
+    NextStepRunAgain,
+    NextStepStopped,
     TurnInput,
     execute_handoff,
     execute_tool_call,
     prepare_turn_input,
+    process_model_turn,
     record_final_output,
     record_model_error,
     record_run_stopped,
     record_tool_call,
     record_tool_error,
+    resolve_handoff_step,
+    resolve_model_response_step,
+    resolve_tool_final_output_step,
+    resolve_tool_run_again_step,
     run_model_turn,
 )
 from .run_state import RunState, build_run_result
@@ -350,6 +359,8 @@ def _run_agent_loop_impl(
                         config.trace_include_sensitive_data if config is not None else True
                     ),
                 )
+                processed_response = process_model_turn(agent, model_turn, run_state)
+                response_step = resolve_model_response_step(processed_response)
                 tool_calls = model_turn.tool_calls
             except Exception as exc:
                 emit_error(lifecycle_hooks, context_wrapper, agent, exc)
@@ -362,33 +373,35 @@ def _run_agent_loop_impl(
                 break
 
 
-            # 如果模型直接返回 final answer，run_state.reached_final_answer 会变成 True
-            if run_state.reached_final_answer:
-                if _run_output_guardrails(
-                    agent,
-                    run_state.final_answer,
-                    run_state,
-                    step_number,
-                    output_guardrails,
-                ):
-                    # 触发拦截,清空 final answer , 标记当前没有合法answer ,并退出循环
+            if response_step is not None:
+                if isinstance(response_step.next_step, NextStepFinalOutput):
+                    if _run_output_guardrails(
+                        agent,
+                        response_step.next_step.final_output,
+                        run_state,
+                        step_number,
+                        output_guardrails,
+                    ):
+                        # 触发拦截,清空 final answer , 标记当前没有合法answer ,并退出循环
+                        record_run_stopped(
+                            run_state,
+                            step_number,
+                            "output_guardrail_triggered",
+                        )
+                    break
+                if isinstance(response_step.next_step, NextStepStopped):
                     record_run_stopped(
                         run_state,
                         step_number,
-                        "output_guardrail_triggered",
+                        response_step.next_step.reason,
                     )
-                break
-
-            if not tool_calls:
-                record_run_stopped(
-                    run_state,
-                    step_number,
-                    "model_returned_no_tool_call",
-                )
-                break
+                    break
 
             handoff_happened = False
             guardrail_happened = False
+            handoff_outcome = None
+            handoff_step = None
+            run_again_step = None
             for action in tool_calls:
                 if not run_state.can_execute_tool():
                     break
@@ -406,22 +419,11 @@ def _run_agent_loop_impl(
                         step_number,
                         lifecycle_hooks,
                     )
-                    if handoff_outcome.reached_final_answer:
-                        run_state.last_agent = handoff_target
-                    if run_state.reached_final_answer and _run_output_guardrails(
-                        agent,
-                        handoff_outcome.final_answer,
-                        run_state,
-                        step_number,
-                        output_guardrails,
-                    ):
-                        record_run_stopped(
-                            run_state,
-                            step_number,
-                            "output_guardrail_triggered",
-                        )
-                        guardrail_happened = True
-                    handoff_happened = True
+                    handoff_step = resolve_handoff_step(
+                        model_turn,
+                        handoff_outcome,
+                        handoff_target,
+                    )
                     break
 
                 try:
@@ -458,11 +460,16 @@ def _run_agent_loop_impl(
                 如果没触发 record_final_output 正式提交 final_answer
                 '''
                 
-                if tool_outcome.should_stop:
+                tool_final_step = resolve_tool_final_output_step(model_turn, tool_outcome)
+                if (
+                    tool_final_step is not None
+                    and isinstance(tool_final_step.next_step, NextStepFinalOutput)
+                ):
                     if output_guardrails:
+                        final_output = tool_final_step.next_step.final_output
                         if _run_output_guardrails(
                             agent,
-                            tool_outcome.result_value,
+                            final_output,
                             run_state,
                             step_number,
                             output_guardrails,
@@ -477,9 +484,40 @@ def _run_agent_loop_impl(
                         record_final_output(
                             run_state,
                             step_number,
-                            tool_outcome.result_value,
+                            final_output,
                         )
                     break
+
+                run_again_step = resolve_tool_run_again_step(model_turn, tool_outcome)
+
+            if (
+                handoff_step is not None
+                and isinstance(handoff_step.next_step, NextStepHandoff)
+                and handoff_outcome is not None
+            ):
+                if handoff_outcome.reached_final_answer:
+                    run_state.last_agent = handoff_step.next_step.target_agent
+                if run_state.reached_final_answer and _run_output_guardrails(
+                    agent,
+                    handoff_outcome.final_answer,
+                    run_state,
+                    step_number,
+                    output_guardrails,
+                ):
+                    record_run_stopped(
+                        run_state,
+                        step_number,
+                        "output_guardrail_triggered",
+                    )
+                    guardrail_happened = True
+                handoff_happened = True
+
+            # 普通工具执行后，落成 NextStepRunAgain
+            if (
+                run_again_step is not None
+                and isinstance(run_again_step.next_step, NextStepRunAgain)
+            ):
+                continue
 
             if run_state.reached_final_answer or handoff_happened or guardrail_happened:
                 break

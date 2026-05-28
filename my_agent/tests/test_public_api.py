@@ -140,6 +140,24 @@ class PublicApiTestCase(unittest.TestCase):
         self.assertTrue(hasattr(agents, "RunResultBase"))
         self.assertTrue(issubclass(agents.RunResult, agents.RunResultBase))
 
+    def test_run_step_state_machine_api_is_public(self) -> None:
+        expected_run_step_api = {
+            "ProcessedResponse",
+            "SingleStepResult",
+            "NextStepFinalOutput",
+            "NextStepRunAgain",
+            "NextStepHandoff",
+            "NextStepStopped",
+            "MODEL_RETURNED_NO_TOOL_CALL",
+        }
+
+        self.assertTrue(expected_run_step_api.issubset(set(agents.__all__)))
+        self.assertEqual(agents.NextStepRunAgain().reason, "tool_results")
+        self.assertEqual(
+            agents.MODEL_RETURNED_NO_TOOL_CALL,
+            "model_returned_no_tool_call",
+        )
+
     def test_run_entrypoints_are_annotated_with_run_result(self) -> None:
         runner_globals = {
             **agents.Runner.run_sync.__globals__,

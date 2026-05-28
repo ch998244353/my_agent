@@ -24,15 +24,31 @@ from agents import (  # noqa: E402
     ToolSpec,
 )
 from agents.run_steps import (  # noqa: E402
+    HandoffOutcome,
+    ModelTurnResult,
+    NextStepFinalOutput,
+    NextStepHandoff,
+    NextStepRunAgain,
+    NextStepStopped,
+    ProcessedResponse,
+    SingleStepResult,
+    ToolExecutionOutcome,
     execute_handoff,
     execute_tool_call,
     interpret_tool_result,
     prepare_turn_input,
+    process_model_turn,
     record_model_error,
     record_run_stopped,
     record_tool_call,
     record_tool_output,
     record_tool_error,
+    resolve_final_output_step,
+    resolve_handoff_step,
+    resolve_model_response_step,
+    resolve_no_tool_call_step,
+    resolve_tool_final_output_step,
+    resolve_tool_run_again_step,
     run_model_turn,
 )
 
@@ -86,6 +102,196 @@ def echo_tool() -> FunctionTool:
 
 
 class RunStepsTestCase(unittest.TestCase):
+    def test_next_step_structures_describe_state_machine_outcomes(self) -> None:
+        target_agent = Agent(
+            memory=AgentMemory(),
+            model=DecisionModel([]),
+            name="Helper",
+        )
+
+        final_step = NextStepFinalOutput(final_output="done")
+        run_again_step = NextStepRunAgain()
+        handoff_step = NextStepHandoff(target_agent=target_agent)
+        step_result = SingleStepResult(
+            model_turn=None,
+            next_step=final_step,
+        )
+
+        self.assertEqual(final_step.final_output, "done")
+        self.assertEqual(run_again_step.reason, "tool_results")
+        self.assertIs(handoff_step.target_agent, target_agent)
+        self.assertIs(step_result.next_step, final_step)
+        self.assertEqual(step_result.generated_items, ())
+
+    def test_process_model_turn_splits_tool_and_handoff_calls(self) -> None:
+        target_agent = Agent(
+            memory=AgentMemory(),
+            model=DecisionModel([]),
+            name="Helper",
+        )
+        agent = Agent(
+            memory=AgentMemory(),
+            model=DecisionModel([]),
+            handoffs=[target_agent],
+        )
+        tool_call = ToolCall("echo_text", {"text": "hello"}, "call_tool")
+        handoff_call = ToolCall(
+            "transfer_to_helper",
+            {"task": "handle this"},
+            "call_handoff",
+        )
+        model_response = ModelResponse(
+            response_id="resp_1",
+            output=[],
+            output_text=None,
+            tool_calls=[tool_call, handoff_call],
+        )
+        model_turn = ModelTurnResult(
+            response=model_response,
+            tool_calls=[tool_call, handoff_call],
+        )
+        run_state = RunState(final_answer={"ok": True}, reached_final_answer=True)
+
+        processed = process_model_turn(agent, model_turn, run_state)
+
+        self.assertIsInstance(processed, ProcessedResponse)
+        self.assertIs(processed.model_turn, model_turn)
+        self.assertIs(processed.model_response, model_response)
+        self.assertEqual(processed.tool_calls, [tool_call])
+        self.assertEqual(processed.handoff_calls, [handoff_call])
+        self.assertTrue(processed.has_final_output)
+        self.assertEqual(processed.final_output, {"ok": True})
+
+    def test_resolve_final_output_step_returns_final_next_step(self) -> None:
+        model_turn = ModelTurnResult(response=None, tool_calls=[])
+        processed = ProcessedResponse(
+            model_turn=model_turn,
+            model_response=None,
+            tool_calls=[],
+            handoff_calls=[],
+            final_output={"answer": "done"},
+            has_final_output=True,
+        )
+
+        step_result = resolve_final_output_step(processed)
+
+        self.assertIsNotNone(step_result)
+        assert step_result is not None
+        self.assertIs(step_result.model_turn, model_turn)
+        self.assertIsInstance(step_result.next_step, NextStepFinalOutput)
+        self.assertEqual(step_result.next_step.final_output, {"answer": "done"})
+        self.assertEqual(step_result.generated_items, ())
+
+    def test_resolve_model_response_step_prefers_final_output(self) -> None:
+        model_turn = ModelTurnResult(response=None, tool_calls=[])
+        processed = ProcessedResponse(
+            model_turn=model_turn,
+            model_response=None,
+            tool_calls=[],
+            handoff_calls=[],
+            final_output="done",
+            has_final_output=True,
+        )
+
+        step_result = resolve_model_response_step(processed)
+
+        self.assertIsNotNone(step_result)
+        assert step_result is not None
+        self.assertIs(step_result.model_turn, model_turn)
+        self.assertIsInstance(step_result.next_step, NextStepFinalOutput)
+        self.assertEqual(step_result.next_step.final_output, "done")
+
+    def test_resolve_no_tool_call_step_returns_stop_reason(self) -> None:
+        model_turn = ModelTurnResult(response=None, tool_calls=[])
+        processed = ProcessedResponse(
+            model_turn=model_turn,
+            model_response=None,
+            tool_calls=[],
+            handoff_calls=[],
+        )
+
+        step_result = resolve_no_tool_call_step(processed)
+
+        self.assertIsNotNone(step_result)
+        assert step_result is not None
+        self.assertIs(step_result.model_turn, model_turn)
+        self.assertIsInstance(step_result.next_step, NextStepStopped)
+        self.assertEqual(step_result.next_step.reason, "model_returned_no_tool_call")
+        self.assertEqual(step_result.generated_items, ())
+
+    def test_resolve_tool_run_again_step_returns_run_again_for_non_final_tool(self) -> None:
+        tool_call = ToolCall("echo_text", {"text": "hello"}, "call_1")
+        model_turn = ModelTurnResult(response=None, tool_calls=[tool_call])
+        tool_outcome = ToolExecutionOutcome(
+            action=tool_call,
+            result="hello",
+            result_value="hello",
+            observation="hello",
+            is_final_answer=False,
+            should_stop=False,
+        )
+
+        step_result = resolve_tool_run_again_step(model_turn, tool_outcome)
+
+        self.assertIsNotNone(step_result)
+        assert step_result is not None
+        self.assertIs(step_result.model_turn, model_turn)
+        self.assertIsInstance(step_result.next_step, NextStepRunAgain)
+        self.assertEqual(step_result.next_step.reason, "tool_results")
+        self.assertEqual(step_result.generated_items, ())
+
+    def test_resolve_tool_final_output_step_returns_final_next_step(self) -> None:
+        tool_call = ToolCall("final_answer", {"answer": "done"}, "call_1")
+        model_turn = ModelTurnResult(response=None, tool_calls=[tool_call])
+        tool_outcome = ToolExecutionOutcome(
+            action=tool_call,
+            result="done",
+            result_value="done",
+            observation="done",
+            is_final_answer=True,
+            should_stop=True,
+        )
+
+        step_result = resolve_tool_final_output_step(model_turn, tool_outcome)
+
+        self.assertIsNotNone(step_result)
+        assert step_result is not None
+        self.assertIs(step_result.model_turn, model_turn)
+        self.assertIsInstance(step_result.next_step, NextStepFinalOutput)
+        self.assertEqual(step_result.next_step.final_output, "done")
+        self.assertEqual(step_result.generated_items, ())
+
+    def test_resolve_handoff_step_returns_handoff_next_step(self) -> None:
+        target_agent = Agent(
+            memory=AgentMemory(),
+            model=DecisionModel([]),
+            name="Helper",
+        )
+        handoff_call = ToolCall(
+            "transfer_to_helper",
+            {"task": "handle this"},
+            "call_1",
+        )
+        model_turn = ModelTurnResult(response=None, tool_calls=[handoff_call])
+        handoff_outcome = HandoffOutcome(
+            action=handoff_call,
+            target_agent_name="Helper",
+            task="handle this",
+            final_answer="done",
+            reached_final_answer=True,
+        )
+
+        step_result = resolve_handoff_step(
+            model_turn,
+            handoff_outcome,
+            target_agent,
+        )
+
+        self.assertIs(step_result.model_turn, model_turn)
+        self.assertIsInstance(step_result.next_step, NextStepHandoff)
+        self.assertIs(step_result.next_step.target_agent, target_agent)
+        self.assertEqual(step_result.generated_items, ())
+
     def test_prepare_turn_input_collects_messages_and_tool_specs(self) -> None:
         registry = ToolRegistry()
         registry.register(echo_tool())

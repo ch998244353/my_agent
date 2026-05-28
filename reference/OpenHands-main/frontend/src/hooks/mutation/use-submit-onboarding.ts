@@ -1,0 +1,50 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router";
+import { openHands } from "#/api/open-hands-axios";
+import { SETTINGS_QUERY_KEYS } from "#/hooks/query/query-keys";
+import { displayErrorToast } from "#/utils/custom-toast-handlers";
+
+type SubmitOnboardingArgs = {
+  selections: Record<string, string | string[]>;
+};
+
+interface OnboardingResponse {
+  status: string;
+  redirect_url: string;
+}
+
+export const useSubmitOnboarding = () => {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ selections }: SubmitOnboardingArgs) => {
+      const { data } = await openHands.post<OnboardingResponse>(
+        "/api/complete_onboarding",
+        { selections },
+      );
+      return data;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: SETTINGS_QUERY_KEYS.all });
+      queryClient.invalidateQueries({ queryKey: ["onboarding-status"] });
+
+      const finalRedirectUrl = data.redirect_url || "/";
+      // Check if the redirect URL is an external URL (starts with http or https)
+      if (
+        finalRedirectUrl.startsWith("http://") ||
+        finalRedirectUrl.startsWith("https://")
+      ) {
+        // For external URLs, redirect using window.location
+        window.location.href = finalRedirectUrl;
+      } else {
+        // For internal routes, use navigate
+        navigate(finalRedirectUrl);
+      }
+    },
+    onError: (error) => {
+      displayErrorToast(error.message);
+      window.location.href = "/";
+    },
+  });
+};

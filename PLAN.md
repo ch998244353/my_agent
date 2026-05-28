@@ -1,269 +1,238 @@
-# my_agent Session 与记忆压缩教学计划
+# my_agent Run Step 状态机教学计划
 
-本文件是后续每节正式课程开始前必须先读取的教学约束。当前只升级 `my_agent` 的 Session / Memory / Context Compaction 层，不制定完整 coding agent、RAG、workspace tools、approval、streaming 的路线。
+本文件是后续每节正式课程开始前必须先读取的教学约束。当前只升级 `my_agent` 的 Run Step 状态机与响应分流层，不制定完整 coding agent、RAG、workspace tools、approval、streaming、MCP 的路线，也不复刻 OpenAI Agents SDK 的工程级全部实现。
 
-## 模块目标
+## 模块总目标
 
-把现有 `AgentMemory` / `AgentSession` 从“agent 内部临时记忆”升级为“可被 `RunConfig` 和 `run_loop` 协作使用的本地会话历史层”。完成本模块后，agent 应该具备：
+把当前 `run_loop.py` 中混在一起的“模型调用、工具调用、handoff、final output、停止原因判断”拆成更清楚的教学版状态机：
 
-1. 多轮对话历史读取。
-2. 本次 run 结果写回 session。
-3. session 历史序列化与 JSON 文件持久化。
-4. 明确区分 `SessionTurn / StepRecord` 结构化历史和 `ChatMessage` 模型上下文。
-5. 规则剪切旧历史，保留最近 turn 原文。
-6. 用规则式或模型式 summarizer 把旧历史压成更短 `MemorySummary`。
-7. `run_loop` 最终使用“summary + 最近历史”作为模型上下文。
+`model response -> ProcessedResponse -> SingleStepResult -> NextStep`
 
-## 为什么继续做这个模块
+完成本模块后，`my_agent` 应该仍保持现有同步 API：
 
-当前 `my_agent` 已经有主循环、工具调用、handoff、guardrails、tracing、基础 `AgentSession`、`JsonSession` 和初步 `MemorySummary`。但当前压缩还不完整：`_compact_if_needed()` 已经能把旧 turn 移到 summary 并删除旧 turn，可 summary 内容主要是拼接旧历史，不是真正的“上下文压缩”。因此后续课程要把压缩策略从 `AgentSession` 中抽出来，先做规则剪切，再接模型式摘要。
+- `Runner.run_sync(agent, task, config=...)`
+- `Agent.run(task, config=...)`
 
-## 参考 OpenAI Agents SDK 的边界
+但主循环不再直接解释所有模型输出，而是只消费 `SingleStepResult.next_step`。这样后续新增 RAG、workspace tools、approval/resume、streaming、coding agent 工具闭环时，不需要继续把逻辑塞进一个越来越长的 `while + if + for` 主循环。
 
-本模块参考 OpenAI Agents SDK 的这些思想：
+## 为什么做这个模块
 
-- `Session` 协议只规定 `get_items / add_items / pop_item / clear_session`。
-- run 开始从 session 读历史，run 结束把新 items 写回 session。
-- 支持压缩的 session 可以额外提供 `run_compaction()`。
-- OpenAI SDK 的 `OpenAIResponsesCompactionSession` 是工程版，会调用 `responses.compact` 并替换底层 session 历史。
-- 官方 session memory 思路分为两类：Context Trimming 和 Context Summarization。
+当前 `my_agent` 已经能进行基础对话、工具调用、子 agent handoff、guardrails、session 读写、记忆压缩和 tracing。旧代码的主要缺陷不是不能跑，而是运行时边界还不够清楚：`run_loop.py` 同时负责调用模型、解释模型返回、执行工具、处理 handoff、处理 final answer 和停止原因。OpenAI Agents SDK 的核心运行模型是把模型响应先解析成 `ProcessedResponse`，再落成 `SingleStepResult`，最后由 `NextStepFinalOutput / NextStepHandoff / NextStepRunAgain / NextStepInterruption` 推进主循环。本模块只学习这个思想的最小可运行版本。
 
-本模块暂不照搬：
+## 本模块做什么
 
-- Responses API 原生 `responses.compact`。
-- server-managed conversation / `previous_response_id`。
-- streaming resume、approval resume、复杂去重。
-- SQLite / Redis / MongoDB session。
+- 新增或调整运行时数据结构：`ProcessedResponse`、`SingleStepResult`、`NextStepFinalOutput`、`NextStepRunAgain`、`NextStepHandoff`。
+- 预留 `NextStepInterruption` 的概念边界，但本模块不实现 approval/resume。
+- 把模型返回后的分类逻辑从 `run_loop.py` 下沉到 `run_steps.py` 或小型辅助模块。
+- 保持现有工具调用、final answer、handoff、guardrails、session 写回行为不被破坏。
+- 每节课只完成一个小的、可测试的增量。
 
-## 固定讲课规则
-
-- 每节正式课开始前必须先读取本文件。
-- 每节正式课先用 100-300 字说明本节课目的，并举例说明当前代码已经能做什么、本节要补什么。
-- 每节课只实现一个小的完整增量，新增实现代码尽量不超过 80 行，不含测试代码；如果确实需要更大改动，必须先拆课。
-- 每节课都要实际更新代码，但不要提前完成后续课程内容。
-- 每个修改都要在对话框里展示具体文件位置和行号，并说明新增、删除或调整了哪些类、字段、函数或逻辑。
-- 不删除用户已有注释，除非注释对应的目标代码已经消失，并保持注释和目标代码位置正确。
-- 测试代码只简略说明，不展开讲解。
-- 所有讲课内容放在对话框内，不另开教学文件。
-
-## 数据结构边界
-
-### `AgentMemory`
-
-负责单次 agent run 过程中的临时执行记忆。它记录当前任务、当前 run 的 step、工具调用、观察结果和错误。它不是跨 run 的长期 session。
-
-### `AgentSession`
-
-负责跨 run 的会话历史。它保存 `summary` 和多个 `SessionTurn`，对外提供 `get_items / add_items / pop_item / clear_session`，使 `RunConfig(session=...)` 可以被 `run_loop` 使用。
-
-### `SessionTurn`
-
-表示一轮用户对话：一个用户 task，加上该轮内部的多个 `StepRecord`。它是内部结构化历史，不直接发给模型。
-
-### `StepRecord`
-
-表示一次执行步骤，能保存 assistant 消息、工具调用、工具 observation、错误和 final answer 标记。它比普通聊天消息更完整，方便序列化、压缩和调试。
-
-### `ChatMessage`
-
-表示模型真正能看到的扁平上下文。`AgentSession.replay()` 会把 `summary + SessionTurn + StepRecord` 转换成 `list[ChatMessage]`。
-
-### `MemorySummary`
-
-表示已压缩旧历史。它应该是短、结构化、可注入模型上下文的摘要，而不是旧历史的完整拼接。
-
-## 课程安排
-
-### 第 1 课：给 `RunConfig` 增加 session 入口
-
-目标：只建立外部会话入口，不改变主循环行为。
-
-新增内容：在 `run_config.py` 中增加可选 `session` 字段，并用最小类型约定说明 session 至少要提供历史读取和写入能力。作用是让调用方可以写 `RunConfig(session=...)`。
-
-状态：已完成。
-
-### 第 2 课：把 session 历史合并到本轮模型输入
-
-目标：让 agent 在当前用户问题前看到已有对话历史。
-
-新增内容：在 `run_loop` 开始阶段识别 `config.session`，把 session 历史转成 `ChatMessage` 后合并到本轮 `agent.memory` 可见的输入中。此课只做读取，不写回。
-
-状态：已完成。
-
-### 第 3 课：把本次 run 的结果写回 session
-
-目标：让本次对话成为下一次对话的历史。
-
-新增内容：在 run 结束时把用户输入、工具调用、工具结果、最终输出整理成 session 可保存的 turn。连续调用同一个 session 时，下一轮能看到上一轮发生过什么。
-
-状态：已完成。
-
-### 第 4 课：整理 session item 转换边界
-
-目标：避免 `run_loop` 直接知道太多 `StepRecord` 和 `RunItem` 细节。
-
-新增内容：增加小型转换函数，例如从 `RunResult` / `RunItem` 生成可回放的 `ChatMessage`。作用是把“运行事件如何变成聊天历史”集中管理。
-
-状态：已完成。
-
-### 第 5 课：给 `AgentSession` 增加最小序列化
-
-目标：为本地保存和恢复做准备。
-
-新增内容：给 `AgentSession` / `SessionTurn` / 必要的 `StepRecord` 数据增加 `to_dict` 和 `from_dict`。只保存任务、消息、工具调用、观察结果、错误和 final 标记，不做文件读写。
-
-状态：已完成。
-
-### 第 6 课：新增 JSON 文件 session
-
-目标：让会话历史可以跨程序重启保存。
-
-新增内容：新增轻量 `JsonSession`，负责从磁盘读取、追加、弹出最近 item、清空历史。文件格式保持简单可读，不引入数据库。
-
-状态：已完成。
-
-### 第 7 课：增加记忆压缩数据结构
-
-目标：为长对话控制上下文长度。
-
-新增内容：在 session 层增加 `MemorySummary` / `summary` 字段，并定义压缩后的历史如何作为一条系统消息进入模型上下文。此课只做数据结构，不接真实模型摘要。
-
-状态：已完成。
-
-### 第 8 课：实现初版规则式历史折叠
-
-目标：让 session 能在 turn 太多时移动旧历史，保留最近历史。
-
-新增内容：根据最大 turn 数触发压缩，把较早 turn 合并进 `summary`，保留最近 turn 原文。当前版本只把旧 turn 渲染并拼接到 summary，因此属于“历史折叠”，还不是真正短摘要。
-
-状态：已完成但需继续改进。
-
-### 第 9 课：抽出 `MemoryCompressor` 边界
-
-目标：不要让 `AgentSession` 同时负责保存历史和决定如何压缩历史。
-
-新增内容：
-
-- 新增 `CompactionPolicy`，字段包括 `compact_after_turns`、`keep_recent_turns`、`max_summary_chars`。
-- 新增 `MemoryCompressor`，负责判断是否需要压缩、选择旧 turns、保留最近 turns。
-- `AgentSession` 只保存 `summary` 和 `turns`，调用 compressor 得到压缩结果。
-- 测试证明 compressor 可以独立测试，不需要完整 run loop。
-
-状态：已完成。
-
-### 第 10 课：实现规则剪切 compact input
-
-目标：在模型摘要前先减少噪声，避免把完整旧历史直接丢给 summarizer。
-
-新增内容：
-
-- 新增旧 turn 到 compact input 的转换函数。
-- 只保留用户目标、关键 assistant 消息、工具名、关键参数、observation 摘要、错误摘要。
-- 对长 observation、长 assistant message、长 error 做字符上限截断。
-- 不剪切最近保留的 turns。
-
-状态：已完成。
-
-### 第 11 课：实现规则式 summarizer fallback
-
-目标：在没有真实模型调用时，也能生成比拼接更短的摘要。
-
-新增内容：
-
-- 新增 `MemorySummarizer` 协议。
-- 新增 `RuleBasedSummarizer`，把 compact input 转成结构化短摘要。
-- 摘要固定输出这些段落：`User goals`、`Constraints`、`Decisions`、`Important facts`、`Open tasks`。
-- 测试证明摘要长度小于 compact input，并保留关键事实。
-
-状态：已完成。
-
-### 第 12 课：实现模型式 summarizer
-
-目标：让旧历史可以由模型生成更自然、更短的摘要。
-
-新增内容：
-
-- 新增 `ModelSummarizer`，接收一个最小模型接口或现有 model adapter。
-- 构造固定 summary prompt，输入为旧 summary + compact input。
-- 输出仍写入 `MemorySummary`。
-- 先用 fake model 做确定性测试，再提供真实 OpenAI Responses API 接入。
-- 如果本机存在 `OPENAI_API_KEY`，用小输入做一次真实模型 smoke test。
-- 模型调用失败时 fallback 到 `RuleBasedSummarizer`。
-
-状态：已完成。
-
-### 第 13 课：把 summarizer 接入 `MemoryCompressor`
-
-目标：让压缩流程真正从“旧 turn 拼接”变成“规则剪切 + 摘要生成”。
-
-新增内容：
-
-- `MemoryCompressor.compact(session)` 返回新的 `MemorySummary` 和保留 turns。
-- `AgentSession` 在新增 turn 后触发 compressor。
-- 旧 turn 被删除，summary 是 summarizer 生成的短摘要。
-- 测试断言：压缩后 `turns` 只剩最近 N 轮，summary 不包含完整长 observation。
-
-状态：已完成。
-
-### 第 14 课：让 `JsonSession` 保存和恢复压缩策略
-
-目标：程序重启后仍能继续按相同规则压缩。
-
-新增内容：
-
-- JSON 中保存 `summary` 和 `compaction_policy`。
-- `JsonSession` 加载后能恢复 compressor 配置。
-- 测试证明：写入多轮、重启 session、继续追加时，仍保持 `summary + 最近历史`。
-
-状态：已完成。
-
-### 第 15 课：确认 `run_loop` 使用压缩后的 session
-
-目标：让主循环最终看到的是“旧历史摘要 + 最近历史”，不是完整旧历史。
-
-新增内容：
-
-- 补充 run_loop/session 集成测试。
-- 确认 `config.session.get_items()` 返回的第一条是 summary message，后面是最近 turns。
-- 确认本轮 run 结束后写回 session 不会破坏已有 summary。
-
-状态：已完成。
-
-### 第 16 课：Session / Memory 模块收尾
-
-目标：确认本模块已经能作为后续 RAG / coding agent 的上下文底座。
-
-新增内容：
-
-- 整理公开导出。
-- 统一命名：`AgentMemory` 负责单次执行，`AgentSession` 负责跨 run 历史，`JsonSession` 负责本地持久化，`MemoryCompressor` 负责上下文压缩。
-- 添加一个最小示例：连续对话、多轮历史、触发压缩、重启恢复。
-- 全量测试通过。
-
-状态：已完成。
-
-## 本模块验收标准
-
-- `RunConfig(session=AgentSession(...))` 可以读写多轮历史。
-- `RunConfig(session=JsonSession(...))` 可以跨程序保存历史。
-- 历史超过阈值后，旧 turns 会被移出原文历史。
-- 旧 turns 先经过规则剪切，再由 summarizer 生成短摘要。
-- 模型上下文只包含 `MemorySummary + 最近 turns`。
-- 最近 turns 保留原始工具调用、observation 和错误细节。
-- 全量测试通过。
-
-## 本模块不做的内容
+## 本模块不做什么
 
 本模块不做：
 
 - RAG。
 - 向量库。
-- coding workspace tools。
+- workspace 文件读写工具。
 - shell / apply_patch 工具。
 - streaming。
 - MCP。
-- 完整 approval / resume。
-- OpenAI server-managed conversation。
-- 数据库 session。
+- approval / resume。
+- server-managed conversation。
+- 多 provider model adapter 重构。
+- 完整 OpenAI Agents SDK 复刻。
 
-Session 与记忆压缩完成后，再选择下一个升级模块。
+这些能力都可以在本模块完成后继续作为独立教学模块推进。
+
+## 固定讲课范式
+
+- 每节正式课开始前必须先读取本文件。
+- 每节正式课如需理解代码结构，先用 CodeGraph 查询相关符号和执行流，不全量读取源码。
+- 每节正式课先用 100-300 字说明本节课目的，并举例说明当前代码已经能做什么、本节要补什么。
+- 每节课都要实际更新代码，但不要一次性完成整个模块。
+- 每节课只实现一个小的完整增量，新增实现代码尽量不超过 80 行，不含测试代码；如果确实需要更多代码，必须拆成更多课程。
+- 每节课修改后，在对话框中逐个展示本节修改点，并说明每段代码的功能。
+- 每节课展示本节修改点时，必须附上本节新增或修改的代码片段；如果代码较长，按文件分段展示关键新增/修改部分。
+- 每个修改都要给出具体文件位置，具体到行号。
+- 每个修改都要说明新增、删除或调整了哪些类、字段、函数或逻辑。
+- 不删除用户已有注释，除非注释对应的目标代码已经消失，并保持注释和目标代码位置正确。
+- 测试代码只简略说明，不展开讲解。
+- 所有讲课内容放在对话框内，不另开教学文件。
+- 每节课结束前必须运行相关测试；如果测试无法运行，要说明原因。
+
+## 当前代码基础
+
+当前 `my_agent` 已经具备这些基础：
+
+- `Agent` 保存 instructions、tools、handoffs、guardrails、capabilities、model 等配置。
+- `Runner.run_sync()` 调用 `run_agent_loop()` 执行同步主循环。
+- `run_loop.py` 已经能读取 session 历史、执行 input/output guardrails、调用模型、执行工具、处理 handoff、写回 session。
+- `run_steps.py` 已经包含 `TurnInput`、`ModelTurnResult`、`ToolExecutionOutcome`、`HandoffOutcome` 等局部结构。
+- `RunState` 已经记录 `new_items`、`final_answer`、`current_turn`、`steps_taken`、guardrail results 等运行状态。
+
+本模块会在这些已有结构上继续演进，不推倒重写。
+
+## 课程安排
+
+### 第 1 课：定义最小 `NextStep` 数据结构
+
+目标：先建立状态机的返回语言，不改变主循环行为。
+
+新增内容：
+
+- 在 `run_steps.py` 中新增 `NextStepFinalOutput`、`NextStepRunAgain`、`NextStepHandoff` 数据结构。
+- 新增 `NextStep` 类型别名。
+- 新增 `SingleStepResult`，用于表达“一轮模型响应和副作用处理后的统一结果”。
+- 本课只增加结构，不改 `run_loop.py` 的执行路径。
+
+作用：让后续课程可以逐步把 `run_loop.py` 的判断分支迁移到 `SingleStepResult.next_step`。
+
+状态：已完成。
+
+### 第 2 课：定义 `ProcessedResponse`
+
+目标：把“模型返回了什么”从“下一步要做什么”中分离出来。
+
+新增内容：
+
+- 在 `run_steps.py` 中新增 `ProcessedResponse`。
+- 保存模型响应、普通工具调用、handoff 工具调用、是否已有 final output 候选。
+- 新增一个小函数，把当前 `ModelTurnResult` 分类成 `ProcessedResponse`。
+
+作用：以后模型返回多个 tool call、handoff 或 final answer 时，先分类，再决定下一步，避免主循环直接读模型细节。
+
+状态：已完成。
+
+### 第 3 课：把 final output 分支落成 `NextStepFinalOutput`
+
+目标：先迁移最简单的结束分支。
+
+新增内容：
+
+- 新增函数根据 `ProcessedResponse` 判断是否已经得到 final output。
+- 返回 `SingleStepResult(next_step=NextStepFinalOutput(...))`。
+- `run_loop.py` 只在这个分支上消费新的 `SingleStepResult`，其他分支暂时保持旧逻辑。
+
+作用：让学生看到状态机如何一步步接管原主循环，而不是一次重构全部代码。
+
+状态：已完成。
+
+### 第 4 课：把“无工具调用停止”纳入 step resolution
+
+目标：把模型没有返回工具调用时的停止原因从主循环中移出。
+
+新增内容：
+
+- 新增处理 “model_returned_no_tool_call” 的 step resolution 函数。
+- 由 `SingleStepResult` 携带停止信息。
+- 保持旧的 `record_run_stopped()` 行为。
+
+作用：统一模型响应后的停止判断，为后面工具分支迁移做准备。
+
+状态：已完成。
+
+### 第 5 课：把普通工具调用落成 `NextStepRunAgain`
+
+目标：让普通工具执行后明确表达“需要再次调用模型”。
+
+新增内容：
+
+- 新增处理普通 tool calls 的小函数。
+- 工具执行后，如果没有 final answer，则返回 `NextStepRunAgain`。
+- `run_loop.py` 根据 `NextStepRunAgain` 继续 while 循环。
+
+作用：这是未来 RAG 工具、workspace 工具、shell 工具的基础闭环。
+
+状态：已完成。
+
+### 第 6 课：把工具结果作为 final output 的分支迁移出去
+
+目标：把 `final_answer` 工具、`stop_on_first_tool`、`stop_at_tool_names` 等停止逻辑纳入 step resolution。
+
+新增内容：
+
+- 将 `ToolExecutionOutcome.should_stop` 解释为 `NextStepFinalOutput`。
+- 保持 output guardrails 行为不变。
+- 保持 `record_final_output()` 的调用位置清晰。
+
+作用：工具既可能只是给模型提供 observation，也可能直接结束运行，本课把这两类结果分清。
+
+状态：已完成。
+
+### 第 7 课：把 handoff 分支落成 `NextStepHandoff`
+
+目标：让子 agent 调用不再只是主循环里的特殊 if 分支。
+
+新增内容：
+
+- 新增 handoff step resolution。
+- handoff 后返回 `NextStepHandoff(target_agent=...)` 或等价结构。
+- `run_loop.py` 消费这个 next step，保持现有 `target_agent.run(task)` 行为。
+
+作用：先保留当前 nested handoff 实现，但把“发生了 agent 转交”这件事显式纳入状态机。
+
+状态：已完成。
+
+### 第 8 课：收敛 `run_loop.py` 为状态机消费者
+
+目标：让主循环只负责编排生命周期，不直接解释模型输出细节。
+
+新增内容：
+
+- 把第 3-7 课形成的分支统一接入 `run_loop.py`。
+- 主循环根据 `NextStepFinalOutput / NextStepRunAgain / NextStepHandoff` 推进。
+- 清理已经迁移出去的重复判断。
+
+作用：完成本模块的核心结构升级。
+
+状态：已完成。
+
+### 第 9 课：补齐 session 与 guardrails 的集成验证
+
+目标：确认状态机升级没有破坏现有上下文底座。
+
+新增内容：
+
+- 补充或调整测试，覆盖 session 写回、output guardrail 拦截、tool guardrail 拒绝、handoff 后 final output。
+- 如有必要，微调 `RunItem` 写入顺序。
+
+作用：保证后续 RAG 和 coding tools 能复用稳定的运行历史。
+
+状态：已完成。
+
+### 第 10 课：模块收尾与公开导出
+
+目标：确认本模块可以作为后续 RAG / workspace tools / approval 的前置底座。
+
+新增内容：
+
+- 整理 `__init__.py` 中需要公开的状态机结构。
+- 增加一个最小示例或测试，展示模型调用、工具执行、run again、final output 的完整链路。
+- 全量测试通过。
+
+作用：把状态机模块收束成稳定教学成果，后续模块不需要重新解释主循环结构。
+
+状态：已完成。
+
+## 本模块验收标准
+
+- 外部调用方式不变：`Runner.run_sync()` 和 `Agent.run()` 仍可用。
+- 现有测试全部通过。
+- `run_loop.py` 不再承担所有模型响应解释逻辑。
+- 模型响应会先被分类成 `ProcessedResponse`。
+- 一轮运行结果会落成 `SingleStepResult`。
+- 主循环根据 `NextStepFinalOutput / NextStepRunAgain / NextStepHandoff` 推进。
+- 预留 `NextStepInterruption` 的概念边界，但不实现 approval/resume。
+- session、guardrails、handoff、tool_use_behavior 的现有行为不被破坏。
+
+## 后续模块衔接
+
+本模块完成后，推荐后续模块顺序：
+
+1. Model 接口与 `ModelSettings` 打通。
+2. Tool planning / tool execution 分层。
+3. 最小 RAG 工具模块。
+4. Workspace tools。
+5. Approval / resume。
+6. Streaming。
+7. Coding agent MVP。

@@ -16,14 +16,18 @@ from agents import (  # noqa: E402
     AgentMemory,
     AgentSession,
     FunctionTool,
+    GuardrailFunctionOutput,
     ModelResponse,
     RunConfig,
     Runner,
     StepRecord,
     ToolArgument,
     ToolCall,
+    ToolGuardrailFunctionOutput,
     ToolRegistry,
     ToolSpec,
+    output_guardrail,
+    tool_input_guardrail,
 )
 from agents.tracing import (  # noqa: E402
     BatchTraceProcessor,
@@ -243,6 +247,121 @@ class RunnerTestCase(unittest.TestCase):
                 "Your name is Ada.",
             ],
         )
+
+    def test_state_machine_session_writeback_preserves_tool_and_final_messages(self) -> None:
+        session = AgentSession()
+        registry = ToolRegistry()
+        registry.register(echo_tool())
+        model = ScriptedModel(
+            [
+                ToolCall("echo_text", {"text": "memory ok"}, "call_1"),
+                ToolCall("final_answer", {"answer": "done"}, "call_2"),
+            ]
+        )
+        agent = Agent(memory=AgentMemory(), model=model, tool_registry=registry)
+
+        result = Runner.run_sync(
+            agent,
+            "Echo then answer.",
+            config=RunConfig(session=session),
+        )
+
+        self.assertTrue(result.reached_final_answer)
+        self.assertEqual(
+            [message.role for message in session.replay()],
+            ["user", "tool_call", "tool_response", "tool_call", "tool_response", "assistant"],
+        )
+        self.assertEqual(session.replay()[-1].content, "done")
+
+    def test_state_machine_output_guardrail_block_does_not_save_assistant_message(self) -> None:
+        @output_guardrail(name="block_unsafe_output")
+        def block_unsafe_output(context, agent, output):
+            return GuardrailFunctionOutput(
+                output_info={"checked_output": output},
+                tripwire_triggered=output == "unsafe",
+            )
+
+        session = AgentSession()
+        model = ScriptedModel([ToolCall("final_answer", {"answer": "unsafe"}, "call_1")])
+        agent = Agent(memory=AgentMemory(), model=model)
+
+        result = Runner.run_sync(
+            agent,
+            "Return unsafe.",
+            config=RunConfig(
+                session=session,
+                output_guardrails=[block_unsafe_output],
+            ),
+        )
+
+        self.assertFalse(result.reached_final_answer)
+        self.assertNotIn("final_output", [item.item_type for item in result.new_items])
+        self.assertEqual(
+            [message.role for message in session.replay()],
+            ["user", "tool_call", "tool_response"],
+        )
+
+    def test_state_machine_tool_guardrail_rejection_runs_again_and_writes_session(self) -> None:
+        called_with = []
+
+        @tool_input_guardrail(name="block_echo")
+        def block_echo(context, agent, tool_call):
+            return ToolGuardrailFunctionOutput.reject_content("blocked by policy")
+
+        guarded_echo = FunctionTool(
+            spec=echo_tool().spec,
+            handler=lambda text: called_with.append(text) or text,
+            tool_input_guardrails=[block_echo],
+        )
+        registry = ToolRegistry()
+        registry.register(guarded_echo)
+        session = AgentSession()
+        model = ScriptedModel(
+            [
+                ToolCall("echo_text", {"text": "secret"}, "call_1"),
+                ToolCall("final_answer", {"answer": "handled rejection"}, "call_2"),
+            ]
+        )
+        agent = Agent(memory=AgentMemory(), model=model, tool_registry=registry)
+
+        result = Runner.run_sync(
+            agent,
+            "Try guarded echo.",
+            config=RunConfig(session=session),
+        )
+
+        self.assertEqual(called_with, [])
+        self.assertTrue(result.reached_final_answer)
+        self.assertIn("tool_input_guardrail", [item.item_type for item in result.new_items])
+        self.assertIn("blocked by policy", [message.content for message in session.replay()])
+        self.assertEqual(session.replay()[-1].content, "handled rejection")
+
+    def test_state_machine_handoff_final_output_updates_last_agent_and_session(self) -> None:
+        helper = Agent(
+            memory=AgentMemory(),
+            model=ScriptedModel([ToolCall("final_answer", {"answer": "helper done"}, "call_2")]),
+            name="Helper",
+        )
+        parent = Agent(
+            memory=AgentMemory(),
+            model=ScriptedModel(
+                [ToolCall("transfer_to_helper", {"task": "finish it"}, "call_1")]
+            ),
+            handoffs=[helper],
+        )
+        session = AgentSession()
+
+        result = Runner.run_sync(
+            parent,
+            "Delegate this.",
+            config=RunConfig(session=session),
+        )
+
+        self.assertTrue(result.reached_final_answer)
+        self.assertEqual(result.final_answer, "helper done")
+        self.assertIs(result.last_agent, helper)
+        self.assertIn("handoff", [item.item_type for item in result.new_items])
+        self.assertEqual(session.replay()[-1].content, "helper done")
 
     def test_runner_uses_compacted_session_context_once_per_run(self) -> None:
         class CountingSession:

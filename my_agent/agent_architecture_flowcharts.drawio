@@ -1,0 +1,598 @@
+<mxfile host="65bd71144e">
+    <diagram id="agentloop-page" name="agentloop">
+        <mxGraphModel dx="1328" dy="604" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="2050" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="al_title" value="agentloop 主流程&#xa;Runner.run_sync / Agent.run -&gt; run_agent_loop -&gt; _run_agent_loop_impl" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#111827;fontColor=#ffffff;fontStyle=1;fontSize=18;align=center;verticalAlign=middle;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="30" width="1260" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_start" value="开始&#xa;Agent.run(task)&#xa;或 Runner.run_sync(agent, task)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="575" y="130" width="250" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_trace" value="创建 trace / task_span / agent_span&#xa;run_agent_loop 包裹追踪上下文" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" parent="1" vertex="1">
+                    <mxGeometry x="575" y="230" width="250" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_init" value="初始化运行上下文&#xa;memory.add_task(task)&#xa;解析 max_steps / max_turns / tool_use_behavior&#xa;创建 RunContextWrapper / RunState" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="530" y="335" width="340" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_hooks" value="收集运行配置&#xa;生命周期 hooks&#xa;input_guardrails / output_guardrails&#xa;session 历史消息" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="180" y="340" width="280" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_agent_start" value="emit_agent_start()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="360" width="210" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_input_guard" value="输入 guardrails 触发?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="600" y="485" width="200" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_input_stop" value="记录 run_stopped&#xa;reason=input_guardrail_triggered&#xa;emit_agent_end&#xa;build_run_result + save session" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="180" y="500" width="290" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_loop_gate" value="进入 while True&#xa;检查 can_execute_tool()&#xa;检查 can_call_model()" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="585" y="635" width="230" height="125" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_limit_stop" value="达到 max_steps 或 max_turns&#xa;record_run_stopped()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="930" y="655" width="260" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_prepare" value="准备本轮模型输入&#xa;prepare_turn_input()&#xa;agent.memory.to_messages()&#xa;agent._tool_specs_for_model()&#xa;prepend session_messages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="510" y="800" width="380" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_model" value="模型回合&#xa;record_model_turn()&#xa;run_model_turn()&#xa;记录 model_response / structured final" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="530" y="955" width="340" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_model_error" value="模型异常?&#xa;emit_error + record_model_error&#xa;跳出 loop" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="965" width="260" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_final_direct" value="run_state.reached_final_answer?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="595" y="1095" width="210" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_output_guard" value="输出 guardrails&#xa;若触发则清空 final_output&#xa;记录 run_stopped" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="930" y="1110" width="270" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_toolcalls" value="有 tool_calls?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="610" y="1245" width="180" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_no_tool" value="无工具调用&#xa;record_run_stopped(&quot;model_returned_no_tool_call&quot;)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="160" y="1255" width="320" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_each_tool" value="遍历每个 ToolCall&#xa;record_tool_call()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="545" y="1380" width="310" height="65" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_handoff_decision" value="tool_name 是 handoff?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="560" y="1485" width="280" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_handoff_module" value="大模块: handoff&#xa;execute_handoff()&#xa;递交给目标 Agent 运行&#xa;细节见 handoff 页" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="130" y="1490" width="310" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_tool_module" value="大模块: toolexecute&#xa;execute_tool_call()&#xa;工具 guardrails / 执行 / 结果解释&#xa;细节见 toolexecute 页" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="960" y="1490" width="320" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_break_decision" value="final answer / handoff / guardrail?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="580" y="1630" width="240" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_finish" value="结束运行&#xa;emit_agent_end()&#xa;build_run_result(run_state)&#xa;config.session.add_items(result.to_input_list())" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="525" y="1780" width="350" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_note" value="源码依据: src/agents/runner.py, agent.py, run_loop.py, run_steps.py, run_state.py&#xa;本页故意省略 memory / handoff / tool execute 内部细节，只展示 agent loop 调度。" style="shape=note;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;verticalAlign=top;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="1905" width="1260" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_start" target="al_trace" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_trace" target="al_init" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e3" value="并行准备" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_init" target="al_hooks" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e4" value="启动事件" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_init" target="al_agent_start" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_init" target="al_input_guard" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e6" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_input_guard" target="al_input_stop" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e7" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_input_guard" target="al_loop_gate" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e8" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_loop_gate" target="al_limit_stop" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e9" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_loop_gate" target="al_prepare" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_prepare" target="al_model" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e11" value="异常" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_model" target="al_model_error" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e12" value="正常" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_model" target="al_final_direct" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e13" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_final_direct" target="al_output_guard" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e14" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_final_direct" target="al_toolcalls" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e15" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_toolcalls" target="al_no_tool" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e16" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_toolcalls" target="al_each_tool" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_each_tool" target="al_handoff_decision" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e18" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_handoff_decision" target="al_handoff_module" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e19" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_handoff_decision" target="al_tool_module" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_handoff_module" target="al_break_decision" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_tool_module" target="al_break_decision" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e22" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_break_decision" target="al_finish" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e23" value="否, 下一轮" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_break_decision" target="al_loop_gate" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1010" y="1682"/>
+                            <mxPoint x="1010" y="697"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="al_e24" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_input_stop" target="al_finish" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e25" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_limit_stop" target="al_finish" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e26" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_model_error" target="al_finish" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e27" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_output_guard" target="al_finish" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="al_e28" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="al_no_tool" target="al_finish" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="memory-page" name="memory">
+        <mxGraphModel dx="1737" dy="789" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1750" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="mem_title" value="memory 详细流程&#xa;AgentMemory / AgentSession / JsonSession / MemoryCompressor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#111827;fontColor=#ffffff;fontStyle=1;fontSize=18;align=center;verticalAlign=middle;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="30" width="1260" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_runtime" value="运行时内存: AgentMemory&#xa;task + steps[StepRecord]" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="120" y="140" width="280" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_add_task" value="add_task(task)&#xa;保存当前用户任务" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="120" y="260" width="280" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_add_step" value="add_step(step)&#xa;记录工具调用、observation、错误、final 标记" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="120" y="370" width="280" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_to_messages" value="to_messages(max_steps)&#xa;user task + 最近 StepRecord&#xa;_append_step_messages()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="120" y="500" width="280" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_render" value="StepRecord 渲染为模型上下文&#xa;messages 原样追加&#xa;tool_call: Calling tools...&#xa;tool_response: Observation / Error retry 提示" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="80" y="635" width="360" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_code" value="return_full_code()&#xa;提取 python_executor 工具的 code 参数&#xa;拼接成完整代码" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="1" vertex="1">
+                    <mxGeometry x="120" y="790" width="280" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_session" value="持久会话内存: AgentSession extends AgentMemory&#xa;turns[SessionTurn] + summary + max_steps/max_turns + compaction policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="520" y="140" width="420" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_post" value="__post_init__()&#xa;旧 task/steps 转为 turn&#xa;trim turns / trim steps&#xa;sync steps from turns&#xa;compact_if_needed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" parent="1" vertex="1">
+                    <mxGeometry x="560" y="270" width="340" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_session_add_task" value="AgentSession.add_task(task)&#xa;创建新的 SessionTurn(task)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="540" y="430" width="300" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_session_add_step" value="AgentSession.add_step(step)&#xa;_ensure_current_turn()&#xa;追加到当前 turn.steps" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="870" y="430" width="300" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_trim" value="容量裁剪&#xa;_trim_turns(): 保留最近 max_turns&#xa;_trim_steps(): 每个 turn 保留最近 max_steps&#xa;_sync_steps_from_turns(): 展平到 self.steps" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="600" y="560" width="460" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_compact_decision" value="需要压缩?&#xa;len(turns) &gt; compact_after_turns" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="660" y="720" width="240" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_no_compact" value="否&#xa;保留现有 turns / summary" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="980" y="740" width="250" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_split" value="是: MemoryCompressor.split_turns()&#xa;compacted_turns = 旧 turns&#xa;kept_turns = 最近 keep_recent_turns" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="580" y="880" width="360" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_render_compact" value="build_compact_input()&#xa;_render_compact_turn()&#xa;按策略裁剪 message / arguments / observation / error" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="560" y="1020" width="400" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_summarizer" value="summarizer.summarize()&#xa;默认 RuleBasedSummarizer: 五段摘要&#xa;可选 ModelSummarizer: OpenAI Responses API&#xa;异常或空输出时 fallback 到规则摘要" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" parent="1" vertex="1">
+                    <mxGeometry x="540" y="1160" width="440" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_compact_result" value="生成 CompactionResult&#xa;summary = 新 MemorySummary&#xa;turns = kept_turns&#xa;task 指向最后一个 turn" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="580" y="1325" width="360" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_session_messages" value="AgentSession.to_messages() / replay()&#xa;先放 summary.to_message()&#xa;再按 turn 顺序放 user + step messages&#xa;供 agentloop 的 prepare_turn_input 使用" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="520" y="1470" width="460" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_json" value="JsonSession 文件持久化适配器&#xa;RunConfig.session 使用 SessionLike 协议" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1020" y="140" width="300" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_load" value="_load()&#xa;读取 JSON 文件&#xa;恢复 AgentSession.from_dict()&#xa;应用运行时覆盖参数&#xa;调用 __post_init__ 重新整理" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="1" vertex="1">
+                    <mxGeometry x="1030" y="270" width="280" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_io" value="get_items() / add_items() / pop_item() / clear_session()&#xa;add_items: user 开新 turn, 非 user 聚合为 StepRecord.messages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="1" vertex="1">
+                    <mxGeometry x="1010" y="430" width="330" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_save" value="_save()&#xa;写入 {version, session} JSON&#xa;session.to_dict() 包含 turns / summary / policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="1" vertex="1">
+                    <mxGeometry x="1030" y="570" width="280" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_note" value="源码依据: src/agents/memory.py, run_config.py, run_loop.py&#xa;关键职责: AgentMemory 负责单次运行上下文；AgentSession 负责多轮 turns、裁剪和压缩；JsonSession 负责落盘。" style="shape=note;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;verticalAlign=top;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="1625" width="1260" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_runtime" target="mem_add_task" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_add_task" target="mem_add_step" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_add_step" target="mem_to_messages" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_to_messages" target="mem_render" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_render" target="mem_code" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_session" target="mem_post" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_post" target="mem_session_add_task" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_post" target="mem_session_add_step" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_session_add_task" target="mem_trim" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_session_add_step" target="mem_trim" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_trim" target="mem_compact_decision" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e12" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_compact_decision" target="mem_no_compact" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e13" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_compact_decision" target="mem_split" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_split" target="mem_render_compact" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_render_compact" target="mem_summarizer" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_summarizer" target="mem_compact_result" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_compact_result" target="mem_session_messages" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e18" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_no_compact" target="mem_session_messages" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1170" y="1528"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="mem_e19" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_json" target="mem_load" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e20" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_load" target="mem_io" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="mem_io" target="mem_save" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="mem_e22" value="恢复/保存 AgentSession" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;dashed=1;" parent="1" source="mem_load" target="mem_session" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="handoff-page" name="handoff">
+        <mxGraphModel dx="1613" dy="733" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1600" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="ho_title" value="handoff 详细流程&#xa;handoffs.py + run_loop.py + run_steps.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#111827;fontColor=#ffffff;fontStyle=1;fontSize=18;align=center;verticalAlign=middle;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="30" width="1260" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_targets" value="Agent.handoffs&#xa;目标 Agent 列表" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="120" y="145" width="250" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_normalize" value="normalize_handoff_name(agent.name)&#xa;小写 + 非字母数字转下划线&#xa;空名称回退 agent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="120" y="260" width="300" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_tool_name" value="handoff_tool_name()&#xa;transfer_to_ + normalized_name" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="140" y="395" width="260" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_specs" value="handoff_tool_specs()&#xa;生成模型可见 ToolSpec&#xa;参数: task: string&#xa;returns: object" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="100" y="515" width="340" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_prepare" value="prepare_turn_input()&#xa;普通工具 specs + handoff specs&#xa;一起交给模型选择" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="520" y="170" width="330" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_model" value="模型返回 ToolCall&#xa;tool_name = transfer_to_xxx&#xa;arguments.task 可选" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="535" y="310" width="300" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_target_lookup" value="handoff_target_for(handoffs, action)&#xa;handoff_map()[action.tool_name]" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="565" y="455" width="240" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_not_handoff" value="未命中目标&#xa;交给 execute_tool_call()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="480" width="250" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_execute" value="execute_handoff()&#xa;提取 task&#xa;缺省时使用 agent.memory.task 或空字符串&#xa;创建 handoff_span" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="625" width="370" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_emit" value="_execute_handoff_impl()&#xa;emit_handoff(hooks, context, source, target)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" parent="1" vertex="1">
+                    <mxGeometry x="525" y="780" width="320" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_child" value="target_agent.run(task)&#xa;递归进入目标 Agent 的 agentloop&#xa;返回 RunResult" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="510" y="900" width="350" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_update_state" value="回写父 RunState&#xa;record_tool_step()&#xa;final_answer = target_result.final_answer&#xa;reached_final_answer = target_result.reached_final_answer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="1035" width="370" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_items" value="追加 RunItem&#xa;item_type=handoff&#xa;metadata: target_agent, task&#xa;若目标已 final: 再追加 final_output" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="100" y="905" width="320" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_memory" value="父 Agent 记忆记录&#xa;agent.memory.add_step(StepRecord)&#xa;tool_calls=[handoff action]&#xa;observation=Handoff to target returned..." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="965" y="895" width="330" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_after" value="回到 run_loop&#xa;若 handoff_outcome.reached_final_answer&#xa;last_agent = target_agent&#xa;再跑父级 output_guardrails" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="1185" width="370" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_break" value="handoff_happened = True&#xa;break 当前 tool_calls 循环&#xa;父 agentloop 结束或停止" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="530" y="1335" width="310" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_note" value="源码依据: src/agents/handoffs.py, agent.py:_handoff_tool_specs/_handoff_target_for, run_loop.py, run_steps.py:execute_handoff&#xa;handoff 本质上被建模为模型可调用工具，但执行时走专门分支，不经过 ToolRegistry。" style="shape=note;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;verticalAlign=top;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="1470" width="1260" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_targets" target="ho_normalize" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_normalize" target="ho_tool_name" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_tool_name" target="ho_specs" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_specs" target="ho_prepare" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_prepare" target="ho_model" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_model" target="ho_target_lookup" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e7" value="未命中" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_target_lookup" target="ho_not_handoff" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e8" value="命中" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_target_lookup" target="ho_execute" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_execute" target="ho_emit" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_emit" target="ho_child" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_child" target="ho_update_state" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_child" target="ho_items" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_child" target="ho_memory" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_update_state" target="ho_after" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ho_e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="ho_after" target="ho_break" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="toolexecute-page" name="toolexecute">
+        <mxGraphModel dx="1129" dy="513" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="2350" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="te_title" value="toolexecute 详细流程&#xa;tools.py + agent_tools.py + run_steps.py" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1f2937;strokeColor=#111827;fontColor=#ffffff;fontStyle=1;fontSize=18;align=center;verticalAlign=middle;" parent="1" vertex="1">
+                    <mxGeometry x="80" y="30" width="1440" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_create" value="工具创建阶段&#xa;@function_tool / create_agent_tool / create_final_answer_tool / create_python_executor_tool" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="100" y="145" width="390" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_introspect" value="_create_function_tool()&#xa;inspect.signature()&#xa;get_type_hints()&#xa;docstring summary + Args&#xa;annotation_to_json_schema()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="1" vertex="1">
+                    <mxGeometry x="110" y="285" width="340" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_function_tool" value="FunctionTool&#xa;spec: ToolSpec&#xa;handler: callable&#xa;is_enabled&#xa;input/output guardrails" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="1" vertex="1">
+                    <mxGeometry x="115" y="455" width="330" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_register" value="Agent.__post_init__()&#xa;注册 default final_answer 工具&#xa;按 capabilities 注册 python_executor&#xa;ToolRegistry.register()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="105" y="610" width="360" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_specs" value="模型可见工具列表&#xa;ToolRegistry.list_specs(context, agent)&#xa;过滤 disabled 工具&#xa;+ handoff specs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="570" y="150" width="360" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_model_call" value="模型返回 ToolCall&#xa;tool_name + arguments + call_id&#xa;run_loop 先 record_tool_call()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="585" y="300" width="330" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_execute_entry" value="execute_tool_call()&#xa;创建 tool_span&#xa;emit_tool_start()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="600" y="440" width="300" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_lookup" value="ToolRegistry.get(action.tool_name)&#xa;tool.is_enabled_for(context, agent)?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="570" width="260" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_disabled" value="禁用或不存在&#xa;抛出异常&#xa;run_loop 捕获后 record_tool_error()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="1050" y="590" width="300" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_input_guard" value="输入工具 guardrails&#xa;逐个判断 is_enabled_for()&#xa;guardrail.run(context, agent, action)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="580" y="735" width="340" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_input_behavior" value="guardrail behavior?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="645" y="870" width="210" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_reject_input" value="reject_content&#xa;不调用 handler&#xa;结果为拒绝消息&#xa;记录 tool_input_guardrail" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="250" y="875" width="270" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_raise_input" value="raise_exception&#xa;抛 ToolInputGuardrailTripwireTriggered" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="990" y="880" width="300" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_execute_handler" value="allow 或无拒绝&#xa;ToolRegistry.execute()&#xa;FunctionTool.execute(arguments)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="590" y="1015" width="320" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_validate_args" value="FunctionTool.execute() 参数校验&#xa;required missing?&#xa;unexpected arguments?&#xa;handler(**arguments)&#xa;异常包装为 ToolExecutionError" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" parent="1" vertex="1">
+                    <mxGeometry x="570" y="1145" width="360" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_interpret" value="interpret_tool_result()&#xa;tool_result_value()&#xa;render_tool_observation()&#xa;is_final_answer_result()&#xa;should_stop_after_tool()" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="570" y="1305" width="360" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_result_rules" value="停止规则&#xa;final_answer 工具: stop&#xa;CodeExecutionResult.is_final_answer: stop&#xa;tool_use_behavior=run_llm_again: continue&#xa;stop_on_first_tool 或 stop_at_tool_names: stop" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" parent="1" vertex="1">
+                    <mxGeometry x="1020" y="1285" width="390" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_output_guard" value="输出工具 guardrails&#xa;guardrail.run(context, agent, action, result)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="590" y="1460" width="320" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_output_behavior" value="输出 guardrail 拒绝或抛异常?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="630" y="1580" width="240" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_reject_output" value="reject_content&#xa;结果替换为拒绝消息&#xa;记录 tool_output_guardrail" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" parent="1" vertex="1">
+                    <mxGeometry x="250" y="1590" width="280" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_record" value="统一记录结果&#xa;run_state.record_tool_step()&#xa;追加 RunItem tool_result&#xa;record_tool_output(model, action, result)&#xa;agent.memory.add_step(StepRecord)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="560" y="1730" width="390" height="125" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_final" value="should_stop 且 finalize_output?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" parent="1" vertex="1">
+                    <mxGeometry x="625" y="1905" width="250" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_record_final" value="record_final_output()&#xa;run_state.final_answer = result_value&#xa;reached_final_answer = True&#xa;追加 RunItem final_output" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" parent="1" vertex="1">
+                    <mxGeometry x="220" y="1905" width="330" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_return" value="emit_tool_end()&#xa;返回 ToolExecutionOutcome&#xa;run_loop 决定继续、停止或跑 output_guardrails" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="590" y="2070" width="340" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_agent_tool" value="Agent.as_tool() / create_agent_tool()&#xa;克隆子 Agent + 新 memory&#xa;tool handler 内部调用 tool_agent.run(input)&#xa;默认提取 child final_answer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" parent="1" vertex="1">
+                    <mxGeometry x="1040" y="145" width="360" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_note" value="源码依据: src/agents/tools.py, agent.py, agent_tools.py, run_steps.py, tool_guardrails.py&#xa;普通工具、final_answer 工具、python_executor 工具、agent-as-tool 都最终以 FunctionTool + ToolRegistry 分发执行。" style="shape=note;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;align=left;verticalAlign=top;" parent="1" vertex="1">
+                    <mxGeometry x="80" y="2210" width="1440" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_create" target="te_introspect" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_introspect" target="te_function_tool" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_function_tool" target="te_register" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_register" target="te_specs" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_specs" target="te_model_call" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_model_call" target="te_execute_entry" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_execute_entry" target="te_lookup" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e8" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_lookup" target="te_disabled" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e9" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_lookup" target="te_input_guard" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_input_guard" target="te_input_behavior" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e11" value="reject" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_input_behavior" target="te_reject_input" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e12" value="raise" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_input_behavior" target="te_raise_input" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e13" value="allow" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_input_behavior" target="te_execute_handler" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_execute_handler" target="te_validate_args" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_validate_args" target="te_interpret" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e16" value="规则" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;dashed=1;" parent="1" source="te_interpret" target="te_result_rules" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_interpret" target="te_output_guard" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e18" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_output_guard" target="te_output_behavior" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e19" value="拒绝" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_output_behavior" target="te_reject_output" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e20" value="允许" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_output_behavior" target="te_record" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e21" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_reject_input" target="te_record" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e22" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_reject_output" target="te_record" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e23" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_record" target="te_final" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e24" value="是" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_final" target="te_record_final" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e25" value="否" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_final" target="te_return" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e26" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="te_record_final" target="te_return" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="te_e27" value="也生成 FunctionTool" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;dashed=1;" parent="1" source="te_agent_tool" target="te_function_tool" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>
