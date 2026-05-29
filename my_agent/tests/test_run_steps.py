@@ -11,12 +11,14 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+import agents.run_steps as run_steps  # noqa: E402
 from agents import (  # noqa: E402
     Agent,
     AgentMemory,
     CodeExecutionResult,
     FunctionTool,
     ModelResponse,
+    RunItem,
     RunState,
     ToolArgument,
     ToolCall,
@@ -152,7 +154,7 @@ class RunStepsTestCase(unittest.TestCase):
         )
         run_state = RunState(final_answer={"ok": True}, reached_final_answer=True)
 
-        processed = process_model_turn(agent, model_turn, run_state)
+        processed = process_model_turn(agent, model_turn, run_state, step_number=1)
 
         self.assertIsInstance(processed, ProcessedResponse)
         self.assertIs(processed.model_turn, model_turn)
@@ -161,6 +163,156 @@ class RunStepsTestCase(unittest.TestCase):
         self.assertEqual(processed.handoff_calls, [handoff_call])
         self.assertTrue(processed.has_final_output)
         self.assertEqual(processed.final_output, {"ok": True})
+
+    def test_process_model_turn_records_plain_text_final_output(self) -> None:
+        agent = Agent(memory=AgentMemory(), model=DecisionModel([]))
+        model_response = ModelResponse(
+            response_id="resp_text",
+            output=[],
+            output_text="Hello from the model.",
+            tool_calls=[],
+        )
+        model_turn = ModelTurnResult(response=model_response, tool_calls=[])
+        run_state = RunState()
+
+        processed = process_model_turn(agent, model_turn, run_state, step_number=2)
+
+        self.assertTrue(processed.has_final_output)
+        self.assertEqual(processed.final_output, "Hello from the model.")
+        self.assertTrue(run_state.reached_final_answer)
+        self.assertEqual(run_state.final_answer, "Hello from the model.")
+        self.assertEqual(run_state.new_items[-1].item_type, "final_output")
+        self.assertEqual(run_state.new_items[-1].step_number, 2)
+        self.assertEqual(run_state.new_items[-1].payload, "Hello from the model.")
+        self.assertEqual(
+            run_state.new_items[-1].metadata,
+            {"source": run_steps.MODEL_OUTPUT_TEXT_FINAL_SOURCE},
+        )
+
+    def test_record_model_text_final_output_uses_stable_metadata(self) -> None:
+        recorder = getattr(run_steps, "record_model_text_final_output", None)
+        self.assertIsNotNone(recorder)
+        assert recorder is not None
+        run_state = RunState()
+
+        recorder(run_state, step_number=3, final_answer="text final")
+
+        self.assertTrue(run_state.reached_final_answer)
+        self.assertEqual(run_state.final_answer, "text final")
+        self.assertEqual(run_state.new_items[-1].item_type, "final_output")
+        self.assertEqual(run_state.new_items[-1].step_number, 3)
+        self.assertEqual(run_state.new_items[-1].payload, "text final")
+        self.assertEqual(
+            run_state.new_items[-1].metadata,
+            {"source": run_steps.MODEL_OUTPUT_TEXT_FINAL_SOURCE},
+        )
+
+    def test_process_model_turn_keeps_structured_final_output_priority(self) -> None:
+        agent = Agent(memory=AgentMemory(), model=DecisionModel([]))
+        model_response = ModelResponse(
+            response_id="resp_structured",
+            output=[],
+            output_text='{"answer": "plain text should not replace this"}',
+            tool_calls=[],
+        )
+        model_turn = ModelTurnResult(response=model_response, tool_calls=[])
+        run_state = RunState(
+            final_answer={"answer": "structured"},
+            reached_final_answer=True,
+        )
+        run_state.new_items.append(
+            RunItem(
+                item_type="final_output",
+                step_number=1,
+                payload={"answer": "structured"},
+                metadata={"source": "structured_output"},
+            )
+        )
+
+        processed = process_model_turn(agent, model_turn, run_state, step_number=1)
+
+        self.assertTrue(processed.has_final_output)
+        self.assertEqual(processed.final_output, {"answer": "structured"})
+        self.assertEqual(len(run_state.new_items), 1)
+        self.assertEqual(run_state.new_items[-1].metadata, {"source": "structured_output"})
+
+    def test_process_model_turn_leaves_final_answer_tool_for_tool_execution(self) -> None:
+        agent = Agent(memory=AgentMemory(), model=DecisionModel([]))
+        final_answer_call = ToolCall(
+            "final_answer",
+            {"answer": "from tool"},
+            "call_final",
+        )
+        model_response = ModelResponse(
+            response_id="resp_tool",
+            output=[],
+            output_text="text should not bypass final_answer tool",
+            tool_calls=[final_answer_call],
+        )
+        model_turn = ModelTurnResult(
+            response=model_response,
+            tool_calls=[final_answer_call],
+        )
+        run_state = RunState()
+
+        processed = process_model_turn(agent, model_turn, run_state, step_number=1)
+
+        self.assertFalse(processed.has_final_output)
+        self.assertEqual(processed.tool_calls, [final_answer_call])
+        self.assertFalse(run_state.reached_final_answer)
+        self.assertEqual(run_state.new_items, [])
+
+    def test_plain_text_final_output_identifies_chat_text_only(self) -> None:
+        helper = getattr(run_steps, "_plain_text_final_output", None)
+        self.assertIsNotNone(helper)
+        assert helper is not None
+
+        model_response = ModelResponse(
+            response_id="resp_text",
+            output=[],
+            output_text="Hello from the model.",
+            tool_calls=[],
+        )
+        tool_call = ToolCall("echo_text", {"text": "hello"}, "call_tool")
+
+        self.assertEqual(
+            helper(
+                model_response,
+                tool_calls=[],
+                handoff_calls=[],
+                has_final_output=False,
+            ),
+            "Hello from the model.",
+        )
+        self.assertIsNone(
+            helper(
+                model_response,
+                tool_calls=[tool_call],
+                handoff_calls=[],
+                has_final_output=False,
+            )
+        )
+        self.assertIsNone(
+            helper(
+                ModelResponse(
+                    response_id="resp_blank",
+                    output=[],
+                    output_text="   ",
+                    tool_calls=[],
+                ),
+                tool_calls=[],
+                handoff_calls=[],
+                has_final_output=False,
+            )
+        )
+        self.assertIsNone(
+            helper(
+                model_response,
+                tool_calls=[],
+                handoff_calls=[],
+                has_final_output=True,
+            )
+        )
 
     def test_resolve_final_output_step_returns_final_next_step(self) -> None:
         model_turn = ModelTurnResult(response=None, tool_calls=[])

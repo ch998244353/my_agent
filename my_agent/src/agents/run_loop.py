@@ -16,6 +16,7 @@ from .lifecycle import (
     emit_error,
 )
 from .memory import session_item_to_message, session_items_from_result
+from .model_settings import ModelSettings
 from .run_config import RunConfig
 from .run_context import RunContextWrapper
 from .result import RunResult
@@ -69,6 +70,11 @@ def _resolve_tool_use_behavior(
     return agent.tool_use_behavior
 
 
+def _resolve_model_settings(agent: Agent, config: RunConfig | None) -> ModelSettings:
+    override = config.model_settings if config is not None else None
+    return agent.model_settings.resolve(override)
+
+
 def _session_messages(config: RunConfig | None) -> list[ChatMessage]:
     if config is None or config.session is None:
         return []
@@ -87,6 +93,7 @@ def _prepend_session_messages(
     return TurnInput(
         messages=[*session_messages, *turn_input.messages],
         tool_specs=turn_input.tool_specs,
+        model_settings=turn_input.model_settings,
     )
 
 # 把 RunResult.to_input_list() 生成的历史消息交给 session 保存
@@ -302,6 +309,7 @@ def _run_agent_loop_impl(
     effective_max_steps = _resolve_max_steps(agent, config)
     effective_max_turns = _resolve_max_turns(config)
     effective_tool_use_behavior = _resolve_tool_use_behavior(agent, config)
+    effective_model_settings = _resolve_model_settings(agent, config)
     context_wrapper = _create_run_context(config)
     lifecycle_hooks = _collect_lifecycle_hooks(agent, config)
     input_guardrails = _collect_input_guardrails(agent, config)
@@ -344,7 +352,11 @@ def _run_agent_loop_impl(
             break
 
         with turn_span(run_state.current_turn + 1, agent.name):
-            turn_input = prepare_turn_input(agent, run_state.context_wrapper)
+            turn_input = prepare_turn_input(
+                agent,
+                run_state.context_wrapper,
+                model_settings=effective_model_settings,
+            )
             turn_input = _prepend_session_messages(turn_input, session_messages)
 
             try:
@@ -359,7 +371,12 @@ def _run_agent_loop_impl(
                         config.trace_include_sensitive_data if config is not None else True
                     ),
                 )
-                processed_response = process_model_turn(agent, model_turn, run_state)
+                processed_response = process_model_turn(
+                    agent,
+                    model_turn,
+                    run_state,
+                    step_number,
+                )
                 response_step = resolve_model_response_step(processed_response)
                 tool_calls = model_turn.tool_calls
             except Exception as exc:

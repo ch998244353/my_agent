@@ -2,9 +2,73 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from inspect import Parameter, signature
+from typing import Any, Protocol, runtime_checkable
 
 from .contracts import ChatMessage, ModelResponse, ToolCall, ToolSpec
+from .model_settings import ModelSettings
+
+
+@runtime_checkable
+class ModelAdapter(Protocol):
+    """同步运行循环需要的最小模型调用边界。"""
+
+    def get_response(
+        self,
+        messages: list[ChatMessage],
+        tool_specs: list[ToolSpec],
+    ) -> ModelResponse:
+        """执行一次模型请求，并返回标准化的模型响应。"""
+
+
+def supports_model_adapter(model: Any) -> bool:
+    """判断对象是否提供当前最小模型调用能力。"""
+    return callable(getattr(model, "get_response", None))
+
+
+def format_model_error(exc: BaseException) -> str:
+    if isinstance(exc, ModelCallError):
+        return str(exc)
+    error_type = exc.__class__.__name__
+    error_message = str(exc) or "<no message>"
+    return f"Model call failed during model_call: {error_type}: {error_message}"
+
+
+class ModelCallError(RuntimeError):
+    def __init__(self, original: BaseException) -> None:
+        self.original = original
+        super().__init__(format_model_error(original))
+
+
+def _accepts_model_settings(get_response: Any) -> bool:
+    try:
+        parameters = signature(get_response).parameters
+    except (TypeError, ValueError):
+        return True
+
+    return "model_settings" in parameters or any(
+        parameter.kind is Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+
+def call_model_response(
+    model: Any,
+    messages: list[ChatMessage],
+    tool_specs: list[ToolSpec],
+    model_settings: ModelSettings,
+) -> ModelResponse:
+    get_response = getattr(model, "get_response", None)
+    if not callable(get_response):
+        raise TypeError("Model does not provide a callable get_response().")
+
+    if _accepts_model_settings(get_response):
+        return get_response(
+            messages,
+            tool_specs,
+            model_settings=model_settings,
+        )
+    return get_response(messages, tool_specs)
 
 
 # 把你自己定义的 ToolSpec 转换成 OpenAI Responses API 可识别的工具格式。
@@ -91,6 +155,25 @@ def response_schema_to_text_format(
         }
     }
 
+
+def _apply_model_settings(
+    request_kwargs: dict[str, Any],
+    model_settings: ModelSettings | None,
+) -> None:
+    if model_settings is None:
+        return
+    if model_settings.temperature is not None:
+        request_kwargs["temperature"] = model_settings.temperature
+    if model_settings.top_p is not None:
+        request_kwargs["top_p"] = model_settings.top_p
+    if model_settings.tool_choice is not None:
+        request_kwargs["tool_choice"] = model_settings.tool_choice
+    if model_settings.max_output_tokens is not None:
+        request_kwargs["max_output_tokens"] = model_settings.max_output_tokens
+    if model_settings.store is not None:
+        request_kwargs["store"] = model_settings.store
+
+
 # 从模型 response 中提取最终文本 output_text；如果没有直接字段，就从 output.content.text 里拼接。
 def response_output_text(response: Any) -> str | None:
     output_text = _get_field(response, "output_text")
@@ -157,6 +240,7 @@ class OpenAIResponsesModel:
         self,
         messages: list[ChatMessage],
         tool_specs: list[ToolSpec],
+        model_settings: ModelSettings | None = None,
     ) -> ModelResponse:
         if self.previous_response_id is not None and self.pending_tool_outputs:
             response_input = list(self.pending_tool_outputs)
@@ -175,6 +259,7 @@ class OpenAIResponsesModel:
             "tools": tools,
             "tool_choice": "auto",
         }
+        _apply_model_settings(request_kwargs, model_settings)
 
         if self.response_schema is not None:
             request_kwargs["text"] = response_schema_to_text_format(

@@ -347,10 +347,13 @@ class AgentTestCase(unittest.TestCase):
 
         self.assertEqual(run_result.step_results, ["first", "second"])
         self.assertEqual(run_result.steps_taken, 2)
-        self.assertFalse(run_result.reached_final_answer)
+        self.assertTrue(run_result.reached_final_answer)
+        self.assertEqual(run_result.final_answer, "done")
         self.assertEqual(len(agent.memory.steps), 2)
         self.assertEqual(len(model.recorded_tool_outputs), 2)
         self.assertEqual(run_result.raw_responses, (tool_response, final_response))
+        self.assertEqual(run_result.new_items[-1].item_type, "final_output")
+        self.assertEqual(run_result.new_items[-1].payload, "done")
 
     def test_agent_result_exposes_new_run_items(self) -> None:
         model_response = ModelResponse(

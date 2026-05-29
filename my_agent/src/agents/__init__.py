@@ -1,6 +1,15 @@
 from .agent import Agent, AgentCapabilities
 from .agent_tools import AgentToolError, create_agent_tool
 from .agents import MiniCodeAgent, MiniToolCallingAgent, MultiStepAgent
+from .chat import ChatTurn, chat_stop_reason, chat_turn_from_result, run_chat_turn
+from .chat_cli import run_chat_cli
+from .chat_runtime import (
+    ChatRuntime,
+    ChatRuntimeConfig,
+    build_chat_agent,
+    build_chat_runtime,
+    build_chat_session,
+)
 from .contracts import (
     AgentRunResult,
     ChatMessage,
@@ -38,7 +47,9 @@ from .memory import (
 )
 from .model_settings import ModelSettings
 from .models import (
+    ModelAdapter,
     OpenAIResponsesModel,
+    supports_model_adapter,
 )
 from .output import (
     StructuredOutputError,
@@ -129,6 +140,12 @@ __all__ = [
     "AgentSession",
     "AgentToolError",
     "ChatMessage",
+    "ChatTurn",
+    "ChatRuntime",
+    "ChatRuntimeConfig",
+    "chat_stop_reason",
+    "chat_turn_from_result",
+    "run_chat_cli",
     "CodeExecutionError",
     "CodeExecutionResult",
     "CompactionPolicy",
@@ -143,6 +160,7 @@ __all__ = [
     "MemoryCompressor",
     "MemorySummarizer",
     "MemorySummary",
+    "ModelAdapter",
     "ModelSummarizer",
     "MiniCodeAgent",
     "MiniPythonExecutor",
@@ -200,6 +218,9 @@ __all__ = [
     "SingleStepResult",
     "add_trace_processor",
     "agent_span",
+    "build_chat_agent",
+    "build_chat_runtime",
+    "build_chat_session",
     "create_agent_tool",
     "create_python_executor_tool",
     "create_final_answer_tool",
@@ -219,6 +240,7 @@ __all__ = [
     "output_guardrail",
     "set_trace_processors",
     "span",
+    "supports_model_adapter",
     "task_span",
     "tool_input_guardrail",
     "tool_output_guardrail",
@@ -228,5 +250,6 @@ __all__ = [
     "output_schema_from_output_type",
     "parse_structured_output",
     "render_tool_signature",
+    "run_chat_turn",
     "tool_to_prompt_text",
 ]

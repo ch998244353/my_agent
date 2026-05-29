@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from .contracts import (
     ChatMessage,
@@ -24,6 +24,8 @@ from .lifecycle import (
     emit_tool_end,
     emit_tool_start,
 )
+from .model_settings import ModelSettings
+from .models import ModelCallError, call_model_response, format_model_error
 from .output import set_structured_final_answer
 from .run_context import RunContextWrapper
 from .run_state import RunState
@@ -42,11 +44,12 @@ def _message_to_trace_dict(message: ChatMessage) -> dict[str, Any]:
     return {"role": message.role, "content": message.content}
 
 
-# “这一轮要发给模型的输入”，包括消息和工具说明
+# “这一轮要发给模型的输入”，包括消息、工具说明和模型设置
 @dataclass(frozen=True)
 class TurnInput:
     messages: list[ChatMessage]
     tool_specs: list[ToolSpec]
+    model_settings: ModelSettings
 
 
 # “模型这一轮返回后的结果”。
@@ -115,6 +118,25 @@ NextStep = NextStepFinalOutput | NextStepRunAgain | NextStepHandoff | NextStepSt
 
 
 MODEL_RETURNED_NO_TOOL_CALL = "model_returned_no_tool_call"
+MODEL_OUTPUT_TEXT_FINAL_SOURCE = "model_output_text"
+
+
+def _plain_text_final_output(
+    model_response: ModelResponse | None,
+    *,
+    tool_calls: list[ToolCall],
+    handoff_calls: list[ToolCall],
+    has_final_output: bool,
+) -> str | None:
+    if has_final_output:
+        return None
+    if tool_calls or handoff_calls:
+        return None
+    if model_response is None or model_response.output_text is None:
+        return None
+    if not model_response.output_text.strip():
+        return None
+    return model_response.output_text
 
 
 @dataclass(frozen=True)
@@ -129,6 +151,7 @@ def process_model_turn(
     agent: Agent,
     model_turn: ModelTurnResult,
     run_state: RunState,
+    step_number: int,
 ) -> ProcessedResponse:
     tool_calls: list[ToolCall] = []
     handoff_calls: list[ToolCall] = []
@@ -137,6 +160,14 @@ def process_model_turn(
             handoff_calls.append(tool_call)
         else:
             tool_calls.append(tool_call)
+    plain_text_final = _plain_text_final_output(
+        model_turn.response,
+        tool_calls=tool_calls,
+        handoff_calls=handoff_calls,
+        has_final_output=run_state.reached_final_answer,
+    )
+    if plain_text_final is not None:
+        record_model_text_final_output(run_state, step_number, plain_text_final)
     return ProcessedResponse(
         model_turn=model_turn,
         model_response=model_turn.response,
@@ -321,11 +352,13 @@ def record_tool_output(model: Any, action: ToolCall, output: Any) -> None:
 def prepare_turn_input(
     agent: Agent,
     context_wrapper: RunContextWrapper | None = None,
+    model_settings: ModelSettings | None = None,
 ) -> TurnInput:
     context_wrapper = context_wrapper or RunContextWrapper()
     return TurnInput(
         messages=agent._messages_for_model(),
         tool_specs=agent._tool_specs_for_model(context_wrapper),
+        model_settings=model_settings or agent.model_settings,
     )
 
 
@@ -354,8 +387,12 @@ def run_model_turn(
         try:
             return _run_model_turn_impl(agent, turn_input, run_state, step_number, hooks)
         except Exception as exc:
-            record_span_error(model_span_ctx, exc)
-            raise
+            if isinstance(exc, ModelCallError):
+                record_span_error(model_span_ctx, exc)
+                raise
+            model_error = ModelCallError(exc)
+            record_span_error(model_span_ctx, model_error)
+            raise model_error from exc
 
 
 def _run_model_turn_impl(
@@ -368,9 +405,11 @@ def _run_model_turn_impl(
     emit_llm_start(hooks, run_state.context_wrapper, agent, turn_input)
     get_response = getattr(agent.model, "get_response", None)
     if callable(get_response):
-        model_response = cast(
-            ModelResponse,
-            get_response(turn_input.messages, turn_input.tool_specs),
+        model_response = call_model_response(
+            agent.model,
+            turn_input.messages,
+            turn_input.tool_specs,
+            turn_input.model_settings,
         )
         emit_llm_end(hooks, run_state.context_wrapper, agent, model_response)
         run_state.new_items.append(
@@ -401,10 +440,12 @@ def _run_model_turn_impl(
 # 把工具失败后的 RunItem、memory、模型可见错误输出统一放到一个函数里，主循环不再关心错误怎么记录
 def record_model_error(
     agent: Agent,
-    error_text: str,
+    error_text: BaseException | str,
     run_state: RunState,
     step_number: int,
 ) -> None:
+    if isinstance(error_text, BaseException):
+        error_text = format_model_error(error_text)
     run_state.new_items.append(
         RunItem(
             item_type="model_error",
@@ -538,6 +579,19 @@ def record_final_output(
             payload=final_answer,
             metadata=metadata or {},
         )
+    )
+
+
+def record_model_text_final_output(
+    run_state: RunState,
+    step_number: int,
+    final_answer: str,
+) -> None:
+    record_final_output(
+        run_state,
+        step_number,
+        final_answer,
+        metadata={"source": MODEL_OUTPUT_TEXT_FINAL_SOURCE},
     )
 
 
