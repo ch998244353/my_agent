@@ -11,6 +11,14 @@ class StructuredOutputError(ValueError):
     """Raised when a model response does not match the configured output schema."""
 
 
+class StructuredOutputRefusalError(StructuredOutputError):
+    """Raised when a model refusal prevents structured output parsing."""
+
+    def __init__(self, refusal: str) -> None:
+        self.refusal = refusal
+        super().__init__(f"Model refused to provide structured output: {refusal}")
+
+
 def output_schema_from_output_type(
     output_type: type[Any] | dict[str, Any] | None,
 ) -> dict[str, Any] | None:
@@ -40,6 +48,8 @@ def set_structured_final_answer(
     schema = output_schema_from_output_type(output_type)
     if schema is None:
         return False
+    if model_response.refusal is not None and model_response.refusal.strip():
+        raise StructuredOutputRefusalError(model_response.refusal)
     if model_response.output_text is None:
         return False
 

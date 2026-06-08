@@ -157,6 +157,20 @@ class AgentConfigurationTestCase(unittest.TestCase):
         self.assertIs(agent.output_type, dict)
         self.assertEqual(agent.tool_use_behavior, "stop_on_first_tool")
 
+    def test_model_settings_resolve_inherits_extended_fields(self) -> None:
+        base = ModelSettings(
+            parallel_tool_calls=True,
+            verbosity="low",
+            reasoning={"effort": "low"},
+        )
+        override = ModelSettings(verbosity="high")
+
+        resolved = base.resolve(override)
+
+        self.assertTrue(resolved.parallel_tool_calls)
+        self.assertEqual(resolved.verbosity, "high")
+        self.assertEqual(resolved.reasoning, {"effort": "low"})
+
     def test_agent_configures_model_with_output_schema(self) -> None:
         output_schema = {
             "type": "object",

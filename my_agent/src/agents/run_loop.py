@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .contracts import ChatMessage, RunItem
+from .environment import LocalEnvironment
 from .guardrails import (
     InputGuardrail,
     InputGuardrailResult,
@@ -23,9 +24,11 @@ from .result import RunResult
 from .run_steps import (
     NextStepFinalOutput,
     NextStepHandoff,
+    NextStepPendingApproval,
     NextStepRunAgain,
     NextStepStopped,
     TurnInput,
+    build_tool_execution_plan,
     execute_handoff,
     execute_tool_call,
     prepare_turn_input,
@@ -35,15 +38,19 @@ from .run_steps import (
     record_run_stopped,
     record_tool_call,
     record_tool_error,
+    run_verification_after_tool,
     resolve_handoff_step,
     resolve_model_response_step,
+    resolve_pending_approval_step,
     resolve_tool_final_output_step,
     resolve_tool_run_again_step,
     run_model_turn,
 )
 from .run_state import RunState, build_run_result
 from .tool_guardrails import ToolGuardrailTripwireTriggered
+from .tool_runtime import ToolExecutionLimits
 from .tracing import agent_span, guardrail_span, task_span, trace, turn_span
+from .verification import VerificationRunner
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -73,6 +80,22 @@ def _resolve_tool_use_behavior(
 def _resolve_model_settings(agent: Agent, config: RunConfig | None) -> ModelSettings:
     override = config.model_settings if config is not None else None
     return agent.model_settings.resolve(override)
+
+
+def _resolve_tool_execution_limits(
+    config: RunConfig | None,
+) -> ToolExecutionLimits | None:
+    if config is not None:
+        return config.tool_execution_limits
+    return None
+
+
+def _resolve_verification_runner(
+    config: RunConfig | None,
+) -> VerificationRunner | None:
+    if config is None or config.verification is None:
+        return None
+    return VerificationRunner(LocalEnvironment())
 
 
 def _session_messages(config: RunConfig | None) -> list[ChatMessage]:
@@ -310,6 +333,8 @@ def _run_agent_loop_impl(
     effective_max_turns = _resolve_max_turns(config)
     effective_tool_use_behavior = _resolve_tool_use_behavior(agent, config)
     effective_model_settings = _resolve_model_settings(agent, config)
+    effective_tool_execution_limits = _resolve_tool_execution_limits(config)
+    verification_runner = _resolve_verification_runner(config)
     context_wrapper = _create_run_context(config)
     lifecycle_hooks = _collect_lifecycle_hooks(agent, config)
     input_guardrails = _collect_input_guardrails(agent, config)
@@ -336,18 +361,12 @@ def _run_agent_loop_impl(
     session_messages = _session_messages(config)
     while True:
         step_number = run_state.next_step_number()
-        if not run_state.can_execute_tool():
+        limit_reason = run_state.next_limit_reason()
+        if limit_reason is not None:
             record_run_stopped(
                 run_state,
                 step_number,
-                "max_steps_reached",
-            )
-            break
-        if not run_state.can_call_model():
-            record_run_stopped(
-                run_state,
-                step_number,
-                "max_turns_reached",
+                limit_reason,
             )
             break
 
@@ -377,8 +396,16 @@ def _run_agent_loop_impl(
                     run_state,
                     step_number,
                 )
-                response_step = resolve_model_response_step(processed_response)
-                tool_calls = model_turn.tool_calls
+                execution_plan = build_tool_execution_plan(
+                    agent,
+                    processed_response,
+                    run_state,
+                )
+                response_step = resolve_pending_approval_step(
+                    model_turn,
+                    execution_plan,
+                ) or resolve_model_response_step(processed_response)
+                tool_calls = execution_plan.actions
             except Exception as exc:
                 emit_error(lifecycle_hooks, context_wrapper, agent, exc)
                 record_model_error(
@@ -407,6 +434,13 @@ def _run_agent_loop_impl(
                         )
                     break
                 if isinstance(response_step.next_step, NextStepStopped):
+                    record_run_stopped(
+                        run_state,
+                        step_number,
+                        response_step.next_step.reason,
+                    )
+                    break
+                if isinstance(response_step.next_step, NextStepPendingApproval):
                     record_run_stopped(
                         run_state,
                         step_number,
@@ -456,6 +490,7 @@ def _run_agent_loop_impl(
                         trace_include_sensitive_data=(
                             config.trace_include_sensitive_data if config is not None else True
                         ),
+                        default_execution_limits=effective_tool_execution_limits,
                     )
                 except ToolGuardrailTripwireTriggered:
                     raise
@@ -467,8 +502,18 @@ def _run_agent_loop_impl(
                         str(exc),
                         run_state,
                         step_number,
+                        default_execution_limits=effective_tool_execution_limits,
                     )
                     continue
+
+                run_verification_after_tool(
+                    agent,
+                    action,
+                    run_state,
+                    step_number,
+                    config.verification if config is not None else None,
+                    verification_runner,
+                )
 
                 '''
                 tool_outcome.result_value 是候选 final answer

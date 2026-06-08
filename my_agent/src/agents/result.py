@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
-from .contracts import ChatMessage, ModelResponse, RunItem, ToolCall
+from .contracts import ChatMessage, ModelResponse, RunItem, ToolApprovalRequest, ToolCall
+from .verification import VerificationResult
 
 T = TypeVar("T")
 
@@ -14,6 +15,62 @@ def _render_tool_call(tool_call: ToolCall) -> str:
         for name, value in tool_call.arguments.items()
     )
     return f"{tool_call.call_id}: {tool_call.tool_name}({arguments})"
+
+
+@dataclass(frozen=True)
+class VerificationSummary:
+    attempts: int
+    passed: bool
+    skipped: int = 0
+    last_observation: str | None = None
+
+
+def _run_item_observation(item: RunItem) -> str | None:
+    observation = item.metadata.get("observation")
+    if isinstance(observation, str):
+        return observation
+    if isinstance(item.payload, str):
+        return item.payload
+    return None
+
+
+def _verification_payload_passed(payload: Any) -> bool | None:
+    if not isinstance(payload, tuple):
+        return None
+    if not all(isinstance(result, VerificationResult) for result in payload):
+        return None
+    return all(result.passed for result in payload)
+
+
+def _verification_summary_from_items(
+    items: tuple[RunItem, ...],
+) -> VerificationSummary | None:
+    attempts = 0
+    skipped = 0
+    passed: bool | None = None
+    last_observation: str | None = None
+    for item in items:
+        if item.item_type == "verification_result":
+            attempts += 1
+            metadata_passed = item.metadata.get("passed")
+            passed = (
+                metadata_passed
+                if isinstance(metadata_passed, bool)
+                else _verification_payload_passed(item.payload)
+            )
+            last_observation = _run_item_observation(item) or last_observation
+        elif item.item_type == "verification_skipped":
+            skipped += 1
+            last_observation = _run_item_observation(item) or last_observation
+
+    if attempts == 0 and skipped == 0:
+        return None
+    return VerificationSummary(
+        attempts=attempts,
+        passed=bool(passed),
+        skipped=skipped,
+        last_observation=last_observation,
+    )
 
 
 if TYPE_CHECKING:
@@ -52,6 +109,23 @@ class RunResultBase:
         if not self.raw_responses:
             return None
         return self.raw_responses[-1].response_id
+
+    @property
+    def pending_approvals(self) -> tuple[ToolApprovalRequest, ...]:
+        return tuple(
+            item.payload
+            for item in self.new_items
+            if item.item_type == "tool_approval_required"
+            and isinstance(item.payload, ToolApprovalRequest)
+        )
+
+    @property
+    def has_pending_approvals(self) -> bool:
+        return bool(self.pending_approvals)
+
+    @property
+    def verification_summary(self) -> VerificationSummary | None:
+        return _verification_summary_from_items(self.new_items)
 
 
     # 可以选择是否严格检查 final answer 是否是要求的 type
@@ -98,6 +172,7 @@ class RunResultBase:
             "last_response_id": self.last_response_id,
             "final_output": self.final_output,
             "reached_final_answer": self.reached_final_answer,
+            "verification_summary": self.verification_summary,
             "new_items": self.new_items,
         }
 

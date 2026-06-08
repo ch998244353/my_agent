@@ -1,8 +1,14 @@
 from .agent import Agent, AgentCapabilities
 from .agent_tools import AgentToolError, create_agent_tool
 from .agents import MiniCodeAgent, MiniToolCallingAgent, MultiStepAgent
-from .chat import ChatTurn, chat_stop_reason, chat_turn_from_result, run_chat_turn
-from .chat_cli import run_chat_cli
+from .chat import (
+    ChatDiagnostics,
+    ChatTurn,
+    chat_stop_reason,
+    chat_turn_status_text,
+    chat_turn_from_result,
+    run_chat_turn,
+)
 from .chat_runtime import (
     ChatRuntime,
     ChatRuntimeConfig,
@@ -19,11 +25,14 @@ from .contracts import (
     RunItem,
     StepRecord,
     ToolArgument,
+    ToolApprovalRequest,
     ToolCall,
     ToolSpec,
     render_tool_signature,
     tool_to_prompt_text,
 )
+from .edit_tools import create_apply_patch_tool
+from .environment import CommandResult, Environment, LocalEnvironment
 from .guardrails import (
     GuardrailFunctionOutput,
     InputGuardrail,
@@ -48,11 +57,16 @@ from .memory import (
 from .model_settings import ModelSettings
 from .models import (
     ModelAdapter,
+    ModelCallError,
+    ModelResponseError,
+    ModelResponseParseError,
+    ModelResponseStatusError,
     OpenAIResponsesModel,
     supports_model_adapter,
 )
 from .output import (
     StructuredOutputError,
+    StructuredOutputRefusalError,
     output_schema_from_output_type,
     parse_structured_output,
 )
@@ -74,6 +88,13 @@ from .run_steps import (
     NextStepStopped,
     ProcessedResponse,
     SingleStepResult,
+    ToolExecutionPlan,
+    build_tool_execution_plan,
+)
+from .shell_tools import (
+    DEFAULT_TEST_COMMAND,
+    create_shell_command_tool,
+    create_test_command_tool,
 )
 from .tool_guardrails import (
     ToolGuardrailFunctionOutput,
@@ -85,6 +106,22 @@ from .tool_guardrails import (
     ToolOutputGuardrailTripwireTriggered,
     tool_input_guardrail,
     tool_output_guardrail,
+)
+from .tool_runtime import (
+    ToolArgumentValidationResult,
+    ToolApprovalDecision,
+    ToolExecutionLimits,
+    ToolExecutionReport,
+    ToolTimeoutBehavior,
+    ToolTimeoutError,
+    clip_tool_text,
+    format_tool_argument_error,
+    format_tool_error,
+    format_tool_observation,
+    requires_tool_approval,
+    run_with_timeout,
+    tool_output_preview,
+    validate_tool_arguments,
 )
 from .tracing import (
     BatchTraceProcessor,
@@ -125,12 +162,27 @@ from .tracing import (
 from .tools import (
     FINAL_ANSWER_TOOL_NAME,
     FunctionTool,
+    ToolApproval,
     ToolExecutionError,
     ToolNotFoundError,
     ToolRegistry,
     create_final_answer_tool,
     function_tool,
 )
+from .verification import VerificationPolicy, VerificationResult, VerificationRunner
+from .workspace import Workspace, WorkspacePathError
+from .workspace_tools import (
+    create_list_workspace_files_tool,
+    create_read_workspace_file_tool,
+    create_readonly_workspace_tools,
+    create_search_workspace_text_tool,
+)
+
+def run_chat_cli(runtime: ChatRuntime) -> None:
+    from .chat_cli import run_chat_cli as _run_chat_cli
+
+    return _run_chat_cli(runtime)
+
 
 __all__ = [
     "Agent",
@@ -140,27 +192,37 @@ __all__ = [
     "AgentSession",
     "AgentToolError",
     "ChatMessage",
+    "ChatDiagnostics",
     "ChatTurn",
     "ChatRuntime",
     "ChatRuntimeConfig",
     "chat_stop_reason",
+    "chat_turn_status_text",
     "chat_turn_from_result",
     "run_chat_cli",
+    "CommandResult",
     "CodeExecutionError",
     "CodeExecutionResult",
     "CompactionPolicy",
+    "DEFAULT_TEST_COMMAND",
+    "Environment",
     "FINAL_ANSWER_TOOL_NAME",
     "FunctionTool",
     "GuardrailFunctionOutput",
     "InputGuardrail",
     "InputGuardrailResult",
     "LifecycleHooks",
+    "LocalEnvironment",
     "MessageRole",
     "MODEL_RETURNED_NO_TOOL_CALL",
     "MemoryCompressor",
     "MemorySummarizer",
     "MemorySummary",
     "ModelAdapter",
+    "ModelCallError",
+    "ModelResponseError",
+    "ModelResponseParseError",
+    "ModelResponseStatusError",
     "ModelSummarizer",
     "MiniCodeAgent",
     "MiniPythonExecutor",
@@ -190,9 +252,17 @@ __all__ = [
     "SpanRecord",
     "StepRecord",
     "StructuredOutputError",
+    "StructuredOutputRefusalError",
     "ToolArgument",
+    "ToolArgumentValidationResult",
+    "ToolApproval",
+    "ToolApprovalDecision",
+    "ToolApprovalRequest",
     "ToolCall",
     "ToolExecutionError",
+    "ToolExecutionLimits",
+    "ToolExecutionPlan",
+    "ToolExecutionReport",
     "ToolGuardrailFunctionOutput",
     "ToolInputGuardrail",
     "ToolInputGuardrailResult",
@@ -203,10 +273,17 @@ __all__ = [
     "ToolOutputGuardrailTripwireTriggered",
     "ToolRegistry",
     "ToolSpec",
+    "ToolTimeoutBehavior",
+    "ToolTimeoutError",
     "Trace",
     "TraceRecord",
     "TracingExporter",
     "TracingProcessor",
+    "VerificationPolicy",
+    "VerificationResult",
+    "VerificationRunner",
+    "Workspace",
+    "WorkspacePathError",
     "BatchTraceProcessor",
     "DebugTracingProcessor",
     "ExportingTracingProcessor",
@@ -221,12 +298,24 @@ __all__ = [
     "build_chat_agent",
     "build_chat_runtime",
     "build_chat_session",
+    "build_tool_execution_plan",
+    "clip_tool_text",
     "create_agent_tool",
+    "create_apply_patch_tool",
     "create_python_executor_tool",
     "create_final_answer_tool",
+    "create_list_workspace_files_tool",
+    "create_read_workspace_file_tool",
+    "create_readonly_workspace_tools",
+    "create_search_workspace_text_tool",
+    "create_shell_command_tool",
+    "create_test_command_tool",
     "custom_span",
     "function_span",
     "function_tool",
+    "format_tool_argument_error",
+    "format_tool_error",
+    "format_tool_observation",
     "generation_span",
     "gen_span_id",
     "gen_trace_id",
@@ -238,15 +327,19 @@ __all__ = [
     "input_guardrail",
     "model_span",
     "output_guardrail",
+    "requires_tool_approval",
+    "run_with_timeout",
     "set_trace_processors",
     "span",
     "supports_model_adapter",
     "task_span",
     "tool_input_guardrail",
     "tool_output_guardrail",
+    "tool_output_preview",
     "tool_span",
     "trace",
     "turn_span",
+    "validate_tool_arguments",
     "output_schema_from_output_type",
     "parse_structured_output",
     "render_tool_signature",

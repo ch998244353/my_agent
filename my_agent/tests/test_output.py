@@ -12,9 +12,13 @@ if str(SRC_DIR) not in sys.path:
 
 from agents.output import (  # noqa: E402
     StructuredOutputError,
+    StructuredOutputRefusalError,
     output_schema_from_output_type,
     parse_structured_output,
+    set_structured_final_answer,
 )
+from agents.contracts import ModelResponse  # noqa: E402
+from agents.run_state import RunState  # noqa: E402
 
 
 class OutputTestCase(unittest.TestCase):
@@ -103,6 +107,32 @@ class OutputTestCase(unittest.TestCase):
             parse_structured_output('{"answer": 42}', schema)
 
         self.assertIn("Expected $.answer to be string", str(context.exception))
+
+    def test_set_structured_final_answer_rejects_refusal_before_json_parse(self) -> None:
+        run_state = RunState()
+        model_response = ModelResponse(
+            response_id="resp_refusal",
+            output=[],
+            output_text="I'm sorry, I cannot help with that.",
+            tool_calls=[],
+            refusal="I'm sorry, I cannot help with that.",
+        )
+
+        with self.assertRaises(StructuredOutputRefusalError) as context:
+            set_structured_final_answer(
+                model_response,
+                {"type": "object"},
+                run_state,
+                step_number=1,
+            )
+
+        self.assertEqual(
+            context.exception.refusal,
+            "I'm sorry, I cannot help with that.",
+        )
+        self.assertIn("refused", str(context.exception))
+        self.assertFalse(run_state.reached_final_answer)
+        self.assertEqual(run_state.new_items, [])
 
 
 if __name__ == "__main__":

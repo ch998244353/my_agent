@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import time
 import unittest
 from pathlib import Path
 from typing import Literal
@@ -25,6 +26,7 @@ from agents import (  # noqa: E402
     function_tool,
     create_agent_tool,
 )
+from agents.tool_runtime import ToolExecutionLimits, ToolTimeoutError  # noqa: E402
 
 
 class ToolRegistryTestCase(unittest.TestCase):
@@ -172,6 +174,36 @@ class ToolRegistryTestCase(unittest.TestCase):
         with self.assertRaises(ToolExecutionError) as error:
             explode.execute({})
         self.assertIn("service unavailable", str(error.exception))
+
+    def test_function_tool_returns_timeout_error_as_result(self) -> None:
+        @function_tool(
+            execution_limits=ToolExecutionLimits(timeout_seconds=0.01),
+        )
+        def slow_echo(text: str) -> str:
+            """Echo text slowly."""
+            time.sleep(0.05)
+            return text
+
+        result = slow_echo.execute({"text": "hello"})
+
+        self.assertIn("Tool 'slow_echo' timed out after", result)
+
+    def test_function_tool_can_raise_timeout_exception(self) -> None:
+        @function_tool(
+            execution_limits=ToolExecutionLimits(
+                timeout_seconds=0.01,
+                timeout_behavior="raise_exception",
+            ),
+        )
+        def slow_echo(text: str) -> str:
+            """Echo text slowly."""
+            time.sleep(0.05)
+            return text
+
+        with self.assertRaises(ToolTimeoutError) as error:
+            slow_echo.execute({"text": "hello"})
+
+        self.assertEqual(error.exception.tool_name, "slow_echo")
 
     def test_function_tool_maps_rich_annotations_to_tool_schemas(self) -> None:
         @function_tool

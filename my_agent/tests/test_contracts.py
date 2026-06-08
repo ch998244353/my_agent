@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from typing import get_args, get_type_hints
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / "src"
@@ -22,6 +23,7 @@ from agents import (  # noqa: E402
     render_tool_signature,
     tool_to_prompt_text,
 )
+from agents.contracts import ToolApprovalRequest  # noqa: E402
 
 
 class ContractsTestCase(unittest.TestCase):
@@ -100,6 +102,27 @@ class ContractsTestCase(unittest.TestCase):
         self.assertEqual(run_item.item_type, "tool_call")
         self.assertEqual(run_item.step_number, 1)
         self.assertIs(run_item.payload, tool_call)
+
+    def test_tool_approval_request_captures_pending_tool_call(self) -> None:
+        request = ToolApprovalRequest(
+            tool_name="delete_file",
+            call_id="call_123",
+            arguments={"path": "notes.txt"},
+            reason="User approval is required before running this tool.",
+        )
+
+        self.assertEqual(request.tool_name, "delete_file")
+        self.assertEqual(request.call_id, "call_123")
+        self.assertEqual(request.arguments, {"path": "notes.txt"})
+        self.assertEqual(
+            request.reason,
+            "User approval is required before running this tool.",
+        )
+
+    def test_run_item_type_includes_tool_approval_required(self) -> None:
+        item_type = get_type_hints(RunItem)["item_type"]
+
+        self.assertIn("tool_approval_required", get_args(item_type))
 
     def test_render_tool_signature(self) -> None:
         tool_spec = ToolSpec(

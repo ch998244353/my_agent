@@ -453,6 +453,39 @@ class AgentTestCase(unittest.TestCase):
         )
         self.assertIn("$.answer", run_result.new_items[-1].payload)
 
+    def test_agent_records_structured_output_refusal_error(self) -> None:
+        output_schema = {
+            "type": "object",
+            "properties": {
+                "answer": {"type": "string"},
+            },
+            "required": ["answer"],
+        }
+        model_response = ModelResponse(
+            response_id="resp_refusal",
+            output=[],
+            output_text="I'm sorry, I cannot help with that.",
+            tool_calls=[],
+            refusal="I'm sorry, I cannot help with that.",
+        )
+        agent = Agent(
+            memory=AgentMemory(),
+            model=ScriptedResponseModel([model_response]),
+            output_type=output_schema,
+        )
+
+        run_result = agent.run("Return a structured answer.")
+
+        self.assertFalse(run_result.reached_final_answer)
+        self.assertEqual(
+            [item.item_type for item in run_result.new_items],
+            ["model_response", "model_error"],
+        )
+        error_payload = run_result.new_items[-1].payload
+        self.assertIn("StructuredOutputRefusalError", error_payload)
+        self.assertIn("refused", error_payload)
+        self.assertNotIn("valid JSON", error_payload)
+
     def test_run_state_keeps_run_items_as_single_result_stream(self) -> None:
         run_state_fields = {field.name for field in fields(RunState)}
 

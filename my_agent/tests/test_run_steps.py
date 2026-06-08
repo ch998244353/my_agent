@@ -17,7 +17,9 @@ from agents import (  # noqa: E402
     AgentMemory,
     CodeExecutionResult,
     FunctionTool,
+    ModelCallError,
     ModelResponse,
+    ModelResponseParseError,
     RunItem,
     RunState,
     ToolArgument,
@@ -34,6 +36,7 @@ from agents.run_steps import (  # noqa: E402
     NextStepStopped,
     ProcessedResponse,
     SingleStepResult,
+    ToolExecutionPlan,
     ToolExecutionOutcome,
     execute_handoff,
     execute_tool_call,
@@ -65,6 +68,11 @@ class ResponseModel:
         self.last_messages = list(messages)
         self.last_tool_specs = list(tool_specs)
         return self.response
+
+
+class FailingResponseModel:
+    def get_response(self, messages, tool_specs):
+        raise ModelResponseParseError("Could not parse response output.")
 
 
 class RecordingModel:
@@ -104,7 +112,27 @@ def echo_tool() -> FunctionTool:
 
 
 class RunStepsTestCase(unittest.TestCase):
-    def test_next_step_structures_describe_state_machine_outcomes(self) -> None:
+    def test_step_and_plan_types_document_state_machine_contracts(self) -> None:
+        docs = "\n".join(
+            cls.__doc__ or ""
+            for cls in (
+                ProcessedResponse,
+                ToolExecutionPlan,
+                NextStepFinalOutput,
+                NextStepRunAgain,
+                NextStepHandoff,
+                NextStepStopped,
+            )
+        )
+
+        self.assertIn("model turn", docs)
+        self.assertIn("execution plan", docs)
+        self.assertIn("final output", docs)
+        self.assertIn("run again", docs)
+        self.assertIn("handoff", docs)
+        self.assertIn("stop", docs)
+
+    def test_next_step_dataclasses_expose_state_machine_payloads(self) -> None:
         target_agent = Agent(
             memory=AgentMemory(),
             model=DecisionModel([]),
@@ -503,6 +531,29 @@ class RunStepsTestCase(unittest.TestCase):
         self.assertEqual(run_state.new_items[0].item_type, "model_response")
         self.assertIs(run_state.new_items[0].payload, model_response)
 
+    def test_run_model_turn_wraps_model_response_errors_once(self) -> None:
+        agent = Agent(
+            memory=AgentMemory(),
+            model=FailingResponseModel(),
+        )
+        agent.memory.add_task("Echo hello.")
+        run_state = RunState()
+        turn_input = prepare_turn_input(agent)
+
+        with self.assertRaises(ModelCallError) as raised:
+            run_model_turn(
+                agent,
+                turn_input,
+                run_state,
+                step_number=1,
+            )
+
+        self.assertIsInstance(raised.exception.original, ModelResponseParseError)
+        self.assertEqual(
+            str(raised.exception),
+            "ModelResponseParseError: Could not parse response output.",
+        )
+
     def test_record_model_error_records_error_item_and_memory_step(self) -> None:
         agent = Agent(memory=AgentMemory(), model=DecisionModel([]))
         run_state = RunState()
@@ -676,12 +727,22 @@ class RunStepsTestCase(unittest.TestCase):
             step_number=1,
         )
 
-        self.assertEqual(outcome.error, "bad args")
+        formatted_error = (
+            "Tool 'missing_tool' observation\n"
+            "status: error\n"
+            "reason: ToolError\n"
+            "detail: bad args"
+        )
+        self.assertEqual(outcome.error, formatted_error)
         self.assertEqual(run_state.steps_taken, 1)
         self.assertEqual(run_state.new_items[0].item_type, "tool_error")
-        self.assertEqual(run_state.new_items[0].payload, "bad args")
-        self.assertEqual(agent.memory.steps[0].error, "bad args")
-        self.assertEqual(model.recorded_tool_outputs[0], (action, "Error: bad args"))
+        self.assertEqual(run_state.new_items[0].payload, formatted_error)
+        self.assertEqual(
+            run_state.new_items[0].metadata["tool_execution"]["reason"],
+            "ToolError",
+        )
+        self.assertEqual(agent.memory.steps[0].error, formatted_error)
+        self.assertEqual(model.recorded_tool_outputs[0], (action, formatted_error))
 
     def test_execute_handoff_records_handoff_and_final_output(self) -> None:
         target_agent = Agent(

@@ -140,17 +140,52 @@ class ToolGuardrailsTestCase(unittest.TestCase):
             [item.item_type for item in run_state.new_items],
             ["tool_input_guardrail", "tool_result"],
         )
+        metadata = run_state.new_items[-1].metadata
+        observation = (
+            "Tool 'delete_file' observation\n"
+            "status: error\n"
+            "reason: input_guardrail_rejected\n"
+            "detail: delete is blocked"
+        )
         self.assertEqual(
-            run_state.new_items[-1].metadata,
+            {key: metadata[key] for key in (
+                "observation",
+                "rejected_by",
+                "guardrail_stage",
+                "guardrail_name",
+                "guardrail_behavior",
+            )},
             {
-                "observation": "delete is blocked",
+                "observation": observation,
                 "rejected_by": "block_delete",
                 "guardrail_stage": "input",
                 "guardrail_name": "block_delete",
                 "guardrail_behavior": "reject_content",
             },
         )
-        self.assertEqual(model.tool_outputs[0], (action, "delete is blocked"))
+        self.assertEqual(
+            {
+                key: metadata["tool_execution"][key]
+                for key in (
+                    "tool_name",
+                    "call_id",
+                    "success",
+                    "output_preview",
+                    "error_type",
+                    "reason",
+                )
+            },
+            {
+                "tool_name": "delete_file",
+                "call_id": "call_1",
+                "success": False,
+                "output_preview": observation,
+                "error_type": "input_guardrail_rejected",
+                "reason": "input_guardrail_rejected",
+            },
+        )
+        self.assertIsInstance(metadata["tool_execution"]["elapsed_seconds"], float)
+        self.assertEqual(model.tool_outputs[0], (action, observation))
         run_result = build_run_result(run_state)
         self.assertEqual(
             run_result.tool_input_guardrail_results[0].guardrail_name,
@@ -205,17 +240,52 @@ class ToolGuardrailsTestCase(unittest.TestCase):
             [item.item_type for item in run_state.new_items],
             ["tool_output_guardrail", "tool_result"],
         )
+        metadata = run_state.new_items[-1].metadata
+        observation = (
+            "Tool 'lookup_secret' observation\n"
+            "status: error\n"
+            "reason: output_guardrail_rejected\n"
+            "detail: secret output was redacted"
+        )
         self.assertEqual(
-            run_state.new_items[-1].metadata,
+            {key: metadata[key] for key in (
+                "observation",
+                "rejected_by",
+                "guardrail_stage",
+                "guardrail_name",
+                "guardrail_behavior",
+            )},
             {
-                "observation": "secret output was redacted",
+                "observation": observation,
                 "rejected_by": "redact_secret",
                 "guardrail_stage": "output",
                 "guardrail_name": "redact_secret",
                 "guardrail_behavior": "reject_content",
             },
         )
-        self.assertEqual(model.tool_outputs[0], (action, "secret output was redacted"))
+        self.assertEqual(
+            {
+                key: metadata["tool_execution"][key]
+                for key in (
+                    "tool_name",
+                    "call_id",
+                    "success",
+                    "output_preview",
+                    "error_type",
+                    "reason",
+                )
+            },
+            {
+                "tool_name": "lookup_secret",
+                "call_id": "call_2",
+                "success": False,
+                "output_preview": observation,
+                "error_type": "output_guardrail_rejected",
+                "reason": "output_guardrail_rejected",
+            },
+        )
+        self.assertIsInstance(metadata["tool_execution"]["elapsed_seconds"], float)
+        self.assertEqual(model.tool_outputs[0], (action, observation))
         run_result = build_run_result(run_state)
         self.assertEqual(
             run_result.tool_output_guardrail_results[0].guardrail_name,

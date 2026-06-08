@@ -7,11 +7,21 @@ from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type
 
 from .contracts import ToolArgument, ToolSpec
 from .tool_guardrails import ToolInputGuardrail, ToolOutputGuardrail
+from .tool_runtime import (
+    ToolApprovalDecision,
+    ToolExecutionLimits,
+    ToolTimeoutError,
+    format_tool_argument_error,
+    run_with_timeout,
+    requires_tool_approval,
+    validate_tool_arguments,
+)
 from .tool_schema import annotation_to_json_schema
 
 
 FINAL_ANSWER_TOOL_NAME = "final_answer"
 ToolEnabled = bool | Callable[[Any, Any], bool]
+ToolApproval = bool | Callable[[Any, dict[str, Any], str | None], bool]
 
 
 class ToolNotFoundError(LookupError):
@@ -24,6 +34,7 @@ class ToolExecutionError(RuntimeError):
     def __init__(self, tool_name: str, message: str):
         super().__init__(f"Tool '{tool_name}' failed: {message}")
         self.tool_name = tool_name
+        self.message = message
 
 
 @dataclass
@@ -34,6 +45,8 @@ class FunctionTool:
     is_enabled: ToolEnabled = True
     tool_input_guardrails: list[ToolInputGuardrail] = field(default_factory=list)
     tool_output_guardrails: list[ToolOutputGuardrail] = field(default_factory=list)
+    execution_limits: ToolExecutionLimits | None = None
+    needs_approval: ToolApproval = False
 
     @property
     def name(self) -> str:
@@ -44,36 +57,51 @@ class FunctionTool:
             return self.is_enabled
         return bool(self.is_enabled(context_wrapper, agent))
 
+    def requires_approval_for(
+        self,
+        context_wrapper: Any,
+        agent: Any,
+        tool_call: Any,
+    ) -> ToolApprovalDecision:
+        return requires_tool_approval(
+            self.needs_approval,
+            context_wrapper,
+            agent,
+            tool_call,
+        )
+
     def execute(self, arguments: dict[str, Any]) -> Any:
         
         # 工具允许接收的参数名集合
-        allowed_arguments = {argument.name for argument in self.spec.arguments}
+        allowed_arguments = [argument.name for argument in self.spec.arguments]
        
         # 模型漏传的必填参数
         required_arguments = [
             argument.name
             for argument in self.spec.arguments
-            if argument.required and argument.name not in arguments
+            if argument.required
         ]
         
         # 模型多传的非法参数
-        unexpected_arguments = sorted(set(arguments) - allowed_arguments)
+        validation = validate_tool_arguments(
+            allowed_arguments=allowed_arguments,
+            required_arguments=required_arguments,
+            provided_arguments=arguments,
+        )
+        argument_error = format_tool_argument_error(validation)
+        if argument_error is not None:
+            raise ToolExecutionError(self.name, argument_error)
 
-        if required_arguments:
-            missing_text = ", ".join(required_arguments)
-            raise ToolExecutionError(
-                self.name,
-                f"Missing required arguments: {missing_text}",
-            )
-        if unexpected_arguments:
-            unexpected_text = ", ".join(unexpected_arguments)
-            raise ToolExecutionError(
-                self.name,
-                f"Unexpected arguments: {unexpected_text}",
-            )
-
+        execution_limits = self.execution_limits or ToolExecutionLimits()
         try:
-            return self.handler(**arguments)
+            return run_with_timeout(
+                tool_name=self.name,
+                operation=lambda: self.handler(**arguments),
+                timeout_seconds=execution_limits.timeout_seconds,
+                timeout_behavior=execution_limits.timeout_behavior,
+            )
+        except ToolTimeoutError:
+            raise
         except ToolExecutionError:
             raise
         except Exception as exc:
@@ -89,6 +117,8 @@ def function_tool(
     is_enabled: ToolEnabled = True,
     tool_input_guardrails: list[ToolInputGuardrail] | None = None,
     tool_output_guardrails: list[ToolOutputGuardrail] | None = None,
+    execution_limits: ToolExecutionLimits | None = None,
+    needs_approval: ToolApproval = False,
 ) -> FunctionTool | Callable[[Callable[..., Any]], FunctionTool]:
     def decorator(real_func: Callable[..., Any]) -> FunctionTool:
         return _create_function_tool(
@@ -98,6 +128,8 @@ def function_tool(
             is_enabled=is_enabled,
             tool_input_guardrails=tool_input_guardrails,
             tool_output_guardrails=tool_output_guardrails,
+            execution_limits=execution_limits,
+            needs_approval=needs_approval,
         )
 
     if func is None:
@@ -113,6 +145,8 @@ def _create_function_tool(
     is_enabled: ToolEnabled = True,
     tool_input_guardrails: list[ToolInputGuardrail] | None = None,
     tool_output_guardrails: list[ToolOutputGuardrail] | None = None,
+    execution_limits: ToolExecutionLimits | None = None,
+    needs_approval: ToolApproval = False,
 ) -> FunctionTool:
     signature = inspect.signature(func)  # 读取函数的参数签名
     '''
@@ -176,6 +210,8 @@ def _create_function_tool(
         is_enabled=is_enabled,
         tool_input_guardrails=list(tool_input_guardrails or []),
         tool_output_guardrails=list(tool_output_guardrails or []),
+        execution_limits=execution_limits,
+        needs_approval=needs_approval,
     )
 
 

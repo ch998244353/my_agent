@@ -11,7 +11,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from agents.contracts import ModelResponse, RunItem, ToolCall  # noqa: E402
+from agents.contracts import ModelResponse, RunItem, ToolApprovalRequest, ToolCall  # noqa: E402
 from agents.result import RunResult, RunResultBase  # noqa: E402
 
 
@@ -111,6 +111,40 @@ class RunResultTestCase(unittest.TestCase):
         self.assertEqual(messages[1].content, "call_1: echo_text(text='hello')")
         self.assertEqual(messages[2].content, "hello")
         self.assertEqual(messages[3].content, "done")
+
+    def test_pending_approvals_returns_tool_approval_requests(self) -> None:
+        request = ToolApprovalRequest(
+            tool_name="delete_file",
+            call_id="call_1",
+            arguments={"path": "notes.txt"},
+            reason="Needs user approval.",
+        )
+        result = RunResult(
+            final_answer=None,
+            step_results=[],
+            reached_final_answer=False,
+            steps_taken=1,
+            new_items=(
+                RunItem("tool_call", 1, ToolCall("delete_file", {}, "call_1")),
+                RunItem("tool_approval_required", 1, request),
+                RunItem("tool_approval_required", 1, "legacy-metadata-only"),
+            ),
+        )
+
+        self.assertEqual(result.pending_approvals, (request,))
+        self.assertTrue(result.has_pending_approvals)
+
+    def test_pending_approvals_is_empty_without_approval_items(self) -> None:
+        result = RunResult(
+            final_answer="done",
+            step_results=[],
+            reached_final_answer=True,
+            steps_taken=1,
+            new_items=(RunItem("tool_result", 1, "done"),),
+        )
+
+        self.assertEqual(result.pending_approvals, ())
+        self.assertFalse(result.has_pending_approvals)
 
     def test_to_state_returns_minimal_resume_surface(self) -> None:
         agent = object()

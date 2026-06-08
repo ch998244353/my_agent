@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 
 MessageRole = Literal["system", "user", "assistant", "tool_call", "tool_response"]
+TOOL_APPROVAL_REQUIRED_METADATA_KEY = "approval_required"
 
 
 @dataclass(frozen=True)
@@ -47,11 +48,20 @@ class ToolCall:
 
 
 @dataclass(frozen=True)
+class ToolApprovalRequest:
+    tool_name: str
+    call_id: str
+    arguments: dict[str, Any] = field(default_factory=dict)
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
 class ModelResponse:
     response_id: str | None
     output: list[Any]
     output_text: str | None
     tool_calls: list[ToolCall]
+    refusal: str | None = None
     raw: Any | None = None
 
 
@@ -71,6 +81,9 @@ class RunItem:
         "output_guardrail",
         "final_output",
         "run_stopped",
+        "tool_approval_required",
+        "verification_result",
+        "verification_skipped",
     ]
     step_number: int
     payload: Any

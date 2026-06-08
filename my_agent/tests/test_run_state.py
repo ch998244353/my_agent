@@ -50,6 +50,27 @@ class RunStateTestCase(unittest.TestCase):
         self.assertEqual(run_state.steps_taken, 1)
         self.assertTrue(run_state.can_execute_tool())
 
+    def test_run_state_reports_no_limit_reason_when_limits_allow_progress(self) -> None:
+        run_state = RunState(max_turns=2, max_steps=3)
+
+        self.assertIsNone(run_state.model_limit_reason())
+        self.assertIsNone(run_state.tool_limit_reason())
+        self.assertIsNone(run_state.next_limit_reason())
+
+    def test_run_state_reports_model_limit_reason_when_turns_are_exhausted(self) -> None:
+        run_state = RunState(current_turn=2, max_turns=2, max_steps=3)
+
+        self.assertEqual(run_state.model_limit_reason(), "max_turns_reached")
+        self.assertIsNone(run_state.tool_limit_reason())
+        self.assertEqual(run_state.next_limit_reason(), "max_turns_reached")
+
+    def test_run_state_reports_tool_limit_reason_before_model_limit(self) -> None:
+        run_state = RunState(current_turn=2, max_turns=2, steps_taken=3, max_steps=3)
+
+        self.assertEqual(run_state.tool_limit_reason(), "max_steps_reached")
+        self.assertEqual(run_state.model_limit_reason(), "max_turns_reached")
+        self.assertEqual(run_state.next_limit_reason(), "max_steps_reached")
+
     def test_build_run_result_derives_legacy_surfaces_from_run_items(self) -> None:
         model_response = ModelResponse(
             response_id="resp_1",

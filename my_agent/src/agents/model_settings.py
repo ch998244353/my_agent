@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, replace
-from typing import Literal
+from typing import Any, Literal
 
 
 ToolChoice = Literal["auto", "required", "none"]
+Verbosity = Literal["low", "medium", "high"]
 
 
 @dataclass(frozen=True)
@@ -12,8 +13,11 @@ class ModelSettings:
     temperature: float | None = None  # 控制模型输出的随机程度
     top_p: float | None = None  # 控制采样范围的参数
     tool_choice: ToolChoice | str | None = None  # 控制模型怎么使用工具
+    parallel_tool_calls: bool | None = None  # 控制模型是否允许同轮发起多个工具调用
     max_output_tokens: int | None = None  # 控制模型最多输出多少 token
     store: bool | None = None  # 控制模型响应是否允许服务端存储
+    reasoning: dict[str, Any] | None = None  # 透传 Responses API 的 reasoning 设置
+    verbosity: Verbosity | None = None  # 控制支持模型的输出详细程度
 
     def resolve(self, override: ModelSettings | None) -> ModelSettings:
         if override is None:

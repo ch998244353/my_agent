@@ -6,6 +6,8 @@ from typing import Any, Protocol
 from .guardrails import InputGuardrail, OutputGuardrail
 from .lifecycle import LifecycleHooks
 from .model_settings import ModelSettings
+from .tool_runtime import ToolExecutionLimits
+from .verification import VerificationPolicy
 
 
 class SessionLike(Protocol):
@@ -39,4 +41,6 @@ class RunConfig:
     max_steps: int | None = None
     max_turns: int | None = None
     tool_use_behavior: str | dict[str, list[str]] | None = None
+    tool_execution_limits: ToolExecutionLimits | None = None
     model_settings: ModelSettings | None = None
+    verification: VerificationPolicy | None = None
