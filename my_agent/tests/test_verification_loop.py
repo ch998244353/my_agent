@@ -2,11 +2,13 @@ from agents import (
     Agent,
     AgentMemory,
     FunctionTool,
+    LocalEnvironment,
     RunConfig,
     ToolCall,
     ToolRegistry,
     ToolSpec,
     VerificationPolicy,
+    Workspace,
 )
 
 
@@ -132,3 +134,43 @@ def test_verification_stops_after_max_attempts_and_tells_model():
     assert summary.passed is False
     assert summary.skipped == 1
     assert "Verification skipped" in (summary.last_observation or "")
+
+
+def test_verification_uses_context_environment_workspace(tmp_path):
+    workspace = Workspace(tmp_path)
+    (tmp_path / "marker.txt").write_text("workspace verification output", encoding="utf-8")
+    model = ToolThenStopModel()
+    registry = ToolRegistry()
+    registry.register(
+        FunctionTool(
+            spec=ToolSpec(
+                name="apply_patch",
+                description="Apply a patch.",
+                arguments=[],
+                returns="string",
+            ),
+            handler=lambda: "patch applied",
+            needs_approval=False,
+        )
+    )
+    agent = Agent(
+        memory=AgentMemory(),
+        model=model,
+        tool_registry=registry,
+        max_steps=5,
+    )
+    config = RunConfig(
+        context={"environment": LocalEnvironment(workspace=workspace)},
+        verification=VerificationPolicy(
+            commands=[
+                "python -c \"from pathlib import Path; print(Path('marker.txt').read_text())\""
+            ],
+            auto_after_tools=["apply_patch"],
+        ),
+    )
+
+    agent.run("change code", config=config)
+
+    assert len(model.turn_messages) == 2
+    second_turn_text = "\n".join(message.content for message in model.turn_messages[1])
+    assert "workspace verification output" in second_turn_text

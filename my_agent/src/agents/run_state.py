@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
-from .contracts import ModelResponse, RunItem
+from .contracts import ModelResponse, RunItem, ToolCall
 from .guardrails import InputGuardrailResult, OutputGuardrailResult
 from .result import RunResult
 from .run_context import RunContextWrapper
@@ -15,6 +16,97 @@ if TYPE_CHECKING:
 
 MAX_TURNS_REACHED = "max_turns_reached"
 MAX_STEPS_REACHED = "max_steps_reached"
+
+
+@dataclass(frozen=True)
+class ApprovalSnapshot:
+    tool_name: str
+    call_id: str
+    arguments: dict[str, Any]
+    status: Literal["pending", "approved", "rejected"]
+    reason: str | None = None
+    rejection_message: str | None = None
+
+
+@dataclass(frozen=True)
+class RunStateSnapshot:
+    input: Any
+    last_agent_name: str | None
+    last_response_id: str | None
+    current_turn: int
+    steps_taken: int
+    max_turns: int | None
+    max_steps: int | None
+    tool_approvals: tuple[ApprovalSnapshot, ...]
+    model_responses: tuple[dict[str, Any], ...]
+    new_items: tuple[dict[str, Any], ...]
+
+
+def _approval_snapshot_from_state(
+    approval: ApprovalSnapshot | Mapping[str, Any],
+) -> ApprovalSnapshot:
+    if isinstance(approval, ApprovalSnapshot):
+        return approval
+    status = approval["status"]
+    if status not in ("pending", "approved", "rejected"):
+        raise ValueError(f"Unknown approval status: {status!r}")
+    return ApprovalSnapshot(
+        tool_name=str(approval["tool_name"]),
+        call_id=str(approval["call_id"]),
+        arguments=dict(approval.get("arguments") or {}),
+        status=status,
+        reason=approval.get("reason"),
+        rejection_message=approval.get("rejection_message"),
+    )
+
+
+def _snapshot_from_state(
+    snapshot: RunStateSnapshot | Mapping[str, Any],
+) -> RunStateSnapshot:
+    if isinstance(snapshot, RunStateSnapshot):
+        return snapshot
+    return RunStateSnapshot(
+        input=snapshot.get("input"),
+        last_agent_name=snapshot.get("last_agent_name"),
+        last_response_id=snapshot.get("last_response_id"),
+        current_turn=int(snapshot.get("current_turn", 0)),
+        steps_taken=int(snapshot.get("steps_taken", 0)),
+        max_turns=snapshot.get("max_turns"),
+        max_steps=snapshot.get("max_steps"),
+        tool_approvals=tuple(
+            _approval_snapshot_from_state(approval)
+            for approval in snapshot.get("tool_approvals", ())
+        ),
+        model_responses=tuple(
+            dict(response) for response in snapshot.get("model_responses", ())
+        ),
+        new_items=tuple(dict(item) for item in snapshot.get("new_items", ())),
+    )
+
+
+def _run_items_from_snapshot(items: tuple[dict[str, Any], ...]) -> list[RunItem]:
+    return [
+        RunItem(
+            item_type=item["item_type"],
+            step_number=int(item["step_number"]),
+            payload=item.get("payload"),
+            metadata=dict(item.get("metadata") or {}),
+        )
+        for item in items
+    ]
+
+
+def _pending_tool_calls_from_approvals(
+    approvals: tuple[ApprovalSnapshot, ...],
+) -> tuple[ToolCall, ...]:
+    return tuple(
+        ToolCall(
+            approval.tool_name,
+            dict(approval.arguments),
+            approval.call_id,
+        )
+        for approval in approvals
+    )
 
 
 # 保存一次 agent run 的过程状态
@@ -31,10 +123,36 @@ class RunState:
     max_steps: int | None = None
     handoff_depth: int = 0
     context_wrapper: RunContextWrapper = field(default_factory=RunContextWrapper)
+    pending_tool_calls: tuple[ToolCall, ...] = ()
     input_guardrail_results: list[InputGuardrailResult] = field(default_factory=list)
     output_guardrail_results: list[OutputGuardrailResult] = field(default_factory=list)
     tool_input_guardrail_results: list[ToolInputGuardrailResult] = field(default_factory=list)
     tool_output_guardrail_results: list[ToolOutputGuardrailResult] = field(default_factory=list)
+
+    @classmethod
+    def from_snapshot(
+        cls,
+        snapshot: RunStateSnapshot | Mapping[str, Any],
+        *,
+        agent: Agent | None = None,
+        context_wrapper: RunContextWrapper | None = None,
+    ) -> RunState:
+        restored_snapshot = _snapshot_from_state(snapshot)
+        context = context_wrapper or RunContextWrapper()
+        context.import_tool_approvals(restored_snapshot.tool_approvals)
+        return cls(
+            new_items=_run_items_from_snapshot(restored_snapshot.new_items),
+            input=restored_snapshot.input,
+            last_agent=agent,
+            current_turn=restored_snapshot.current_turn,
+            max_turns=restored_snapshot.max_turns,
+            steps_taken=restored_snapshot.steps_taken,
+            max_steps=restored_snapshot.max_steps,
+            context_wrapper=context,
+            pending_tool_calls=_pending_tool_calls_from_approvals(
+                restored_snapshot.tool_approvals
+            ),
+        )
 
     # 运行时判断 和 递增方法
     def can_call_model(self) -> bool:

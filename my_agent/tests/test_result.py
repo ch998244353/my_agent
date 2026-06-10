@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -13,6 +14,7 @@ if str(SRC_DIR) not in sys.path:
 
 from agents.contracts import ModelResponse, RunItem, ToolApprovalRequest, ToolCall  # noqa: E402
 from agents.result import RunResult, RunResultBase  # noqa: E402
+from agents.run_context import RunContextWrapper  # noqa: E402
 
 
 class RunResultTestCase(unittest.TestCase):
@@ -134,6 +136,50 @@ class RunResultTestCase(unittest.TestCase):
         self.assertEqual(result.pending_approvals, (request,))
         self.assertTrue(result.has_pending_approvals)
 
+    def test_pending_approval_summaries_expose_display_ready_requests(self) -> None:
+        first_request = ToolApprovalRequest(
+            tool_name="delete_file",
+            call_id="call_1",
+            arguments={"path": "notes.txt"},
+            reason="Needs user approval.",
+        )
+        second_request = ToolApprovalRequest(
+            tool_name="write_file",
+            call_id="call_2",
+            arguments={"path": "todo.txt", "content": "ship"},
+            reason=None,
+        )
+        result = RunResult(
+            final_answer=None,
+            step_results=[],
+            reached_final_answer=False,
+            steps_taken=1,
+            new_items=(
+                RunItem("tool_approval_required", 1, first_request),
+                RunItem("tool_result", 1, "unrelated"),
+                RunItem("tool_approval_required", 1, second_request),
+            ),
+        )
+
+        summaries = getattr(result, "pending_approval_summaries", None)
+
+        self.assertIsNotNone(summaries)
+        self.assertEqual(
+            [
+                (summary.tool_name, summary.call_id, summary.arguments, summary.reason)
+                for summary in summaries
+            ],
+            [
+                ("delete_file", "call_1", {"path": "notes.txt"}, "Needs user approval."),
+                (
+                    "write_file",
+                    "call_2",
+                    {"path": "todo.txt", "content": "ship"},
+                    None,
+                ),
+            ],
+        )
+
     def test_pending_approvals_is_empty_without_approval_items(self) -> None:
         result = RunResult(
             final_answer="done",
@@ -146,29 +192,58 @@ class RunResultTestCase(unittest.TestCase):
         self.assertEqual(result.pending_approvals, ())
         self.assertFalse(result.has_pending_approvals)
 
-    def test_to_state_returns_minimal_resume_surface(self) -> None:
-        agent = object()
-        final_item = RunItem("final_output", 1, "done")
-        response = ModelResponse("resp_1", [], None, [])
+    def test_to_state_returns_json_compatible_resume_surface(self) -> None:
+        class NamedAgent:
+            name = "Planner"
+
+        request = ToolApprovalRequest(
+            tool_name="delete_file",
+            call_id="call_1",
+            arguments={"path": "notes.txt"},
+            reason="Needs approval.",
+        )
+        context = RunContextWrapper()
+        context.request_tool_call_approval("delete_file", "call_1")
+        response = ModelResponse(
+            "resp_1",
+            [{"type": "function_call", "call_id": "call_1"}],
+            None,
+            [ToolCall("delete_file", {"path": "notes.txt"}, "call_1")],
+            usage={"input_tokens": 10},
+        )
         result = RunResult(
-            final_answer="done",
+            final_answer=None,
             step_results=[],
-            reached_final_answer=True,
+            reached_final_answer=False,
             steps_taken=1,
-            input="Plan next step.",
-            last_agent=agent,
+            input="Delete notes.",
+            last_agent=NamedAgent(),
+            current_turn=2,
+            max_turns=4,
+            max_steps=5,
+            context_wrapper=context,
             raw_responses=(response,),
-            new_items=(final_item,),
+            new_items=(
+                RunItem("model_response", 1, response),
+                RunItem("tool_approval_required", 1, request),
+            ),
         )
 
         state = result.to_state()
 
-        self.assertEqual(state["input"], "Plan next step.")
-        self.assertIs(state["last_agent"], agent)
+        json.dumps(state)
+        self.assertNotIn("last_agent", state)
+        self.assertEqual(state["input"], "Delete notes.")
+        self.assertEqual(state["last_agent_name"], "Planner")
         self.assertEqual(state["last_response_id"], "resp_1")
-        self.assertEqual(state["final_output"], "done")
-        self.assertTrue(state["reached_final_answer"])
-        self.assertEqual(state["new_items"], (final_item,))
+        self.assertEqual(state["current_turn"], 2)
+        self.assertEqual(state["steps_taken"], 1)
+        self.assertEqual(state["max_turns"], 4)
+        self.assertEqual(state["max_steps"], 5)
+        self.assertEqual(state["tool_approvals"][0]["arguments"], {"path": "notes.txt"})
+        self.assertEqual(state["tool_approvals"][0]["status"], "pending")
+        self.assertEqual(state["model_responses"][0]["response_id"], "resp_1")
+        self.assertEqual(state["new_items"][1]["payload"]["call_id"], "call_1")
 
 
 if __name__ == "__main__":

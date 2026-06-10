@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from .contracts import ChatMessage, RunItem
+from .contracts import ChatMessage, RunItem, ToolCall
 from .environment import LocalEnvironment
 from .guardrails import (
     InputGuardrail,
@@ -18,38 +18,40 @@ from .lifecycle import (
 )
 from .memory import session_item_to_message, session_items_from_result
 from .model_settings import ModelSettings
+from .model_turn import TurnInput, prepare_turn_input, run_model_turn
 from .run_config import RunConfig
 from .run_context import RunContextWrapper
+from .run_resume import resume_pending_tool_approvals
+from .run_recording import (
+    record_final_output,
+    record_model_error,
+    record_run_stopped,
+    record_tool_call,
+    run_verification_after_tool,
+)
 from .result import RunResult
 from .run_steps import (
+    execute_handoff,
+)
+from .run_state import RunState, build_run_result
+from .tool_execution import execute_tool_call, record_tool_error
+from .tool_guardrails import ToolGuardrailTripwireTriggered
+from .tool_planning import ToolExecutionPlan, build_tool_execution_plan
+from .tool_runtime import ToolExecutionLimits
+from .tracing import agent_span, guardrail_span, task_span, trace, turn_span
+from .turn_resolution import (
     NextStepFinalOutput,
     NextStepHandoff,
     NextStepPendingApproval,
     NextStepRunAgain,
     NextStepStopped,
-    TurnInput,
-    build_tool_execution_plan,
-    execute_handoff,
-    execute_tool_call,
-    prepare_turn_input,
     process_model_turn,
-    record_final_output,
-    record_model_error,
-    record_run_stopped,
-    record_tool_call,
-    record_tool_error,
-    run_verification_after_tool,
     resolve_handoff_step,
     resolve_model_response_step,
     resolve_pending_approval_step,
     resolve_tool_final_output_step,
     resolve_tool_run_again_step,
-    run_model_turn,
 )
-from .run_state import RunState, build_run_result
-from .tool_guardrails import ToolGuardrailTripwireTriggered
-from .tool_runtime import ToolExecutionLimits
-from .tracing import agent_span, guardrail_span, task_span, trace, turn_span
 from .verification import VerificationRunner
 
 if TYPE_CHECKING:
@@ -92,9 +94,16 @@ def _resolve_tool_execution_limits(
 
 def _resolve_verification_runner(
     config: RunConfig | None,
+    context_wrapper: RunContextWrapper,
 ) -> VerificationRunner | None:
     if config is None or config.verification is None:
         return None
+    if context_wrapper.verification_runner is not None:
+        return context_wrapper.verification_runner
+    if context_wrapper.environment is not None:
+        return VerificationRunner(context_wrapper.environment)
+    if context_wrapper.workspace is not None:
+        return VerificationRunner(LocalEnvironment(workspace=context_wrapper.workspace))
     return VerificationRunner(LocalEnvironment())
 
 
@@ -133,6 +142,24 @@ def _build_result_and_save_session(
     result = build_run_result(run_state)
     _save_result_to_session(config, result)
     return result
+
+
+def _tool_calls_selected_for_execution(
+    execution_plan: ToolExecutionPlan,
+) -> tuple[ToolCall, ...]:
+    execution_batch = execution_plan.execution_batch
+    selected_call_keys = {
+        (action.tool_name, action.call_id)
+        for action in (
+            *execution_batch.approved_tool_calls,
+            *execution_batch.handoff_calls,
+        )
+    }
+    return tuple(
+        action
+        for action in execution_plan.actions
+        if (action.tool_name, action.call_id) in selected_call_keys
+    )
 
 
 def _create_run_context(config: RunConfig | None) -> RunContextWrapper:
@@ -323,29 +350,79 @@ def run_agent_loop(
                 return _run_agent_loop_impl(agent, task, config=config)
 
 
+def resume_agent_loop(
+    agent: Agent,
+    run_state: RunState,
+    config: RunConfig | None = None,
+) -> RunResult:
+    task = run_state.input if isinstance(run_state.input, str) else ""
+    workflow_name = (
+        config.workflow_name
+        if config is not None and config.workflow_name is not None
+        else agent.name
+    )
+    trace_metadata = (
+        config.trace_metadata
+        if config is not None and config.trace_metadata is not None
+        else (config.metadata if config is not None else None)
+    )
+    with trace(
+        workflow_name,
+        trace_id=config.trace_id if config is not None else None,
+        group_id=config.group_id if config is not None else None,
+        metadata=trace_metadata,
+        disabled=config.tracing_disabled if config is not None else False,
+        only_if_missing=True,
+    ):
+        with task_span(task):
+            with agent_span(agent.name, task=task):
+                return _run_agent_loop_impl(
+                    agent,
+                    task,
+                    config=config,
+                    run_state=run_state,
+                )
+
+
 def _run_agent_loop_impl(
     agent: Agent,
     task: str,
     config: RunConfig | None = None,
+    run_state: RunState | None = None,
 ) -> RunResult:
-    agent.memory.add_task(task)
+    is_resuming = run_state is not None
+    if not is_resuming:
+        agent.memory.add_task(task)
     effective_max_steps = _resolve_max_steps(agent, config)
     effective_max_turns = _resolve_max_turns(config)
     effective_tool_use_behavior = _resolve_tool_use_behavior(agent, config)
     effective_model_settings = _resolve_model_settings(agent, config)
     effective_tool_execution_limits = _resolve_tool_execution_limits(config)
-    verification_runner = _resolve_verification_runner(config)
-    context_wrapper = _create_run_context(config)
+    context_wrapper = (
+        run_state.context_wrapper
+        if run_state is not None
+        else _create_run_context(config)
+    )
+    verification_runner = _resolve_verification_runner(config, context_wrapper)
     lifecycle_hooks = _collect_lifecycle_hooks(agent, config)
     input_guardrails = _collect_input_guardrails(agent, config)
     output_guardrails = _collect_output_guardrails(agent, config)
-    run_state = RunState(
-        input=task,
-        last_agent=agent,
-        max_steps=effective_max_steps,
-        max_turns=effective_max_turns,
-        context_wrapper=context_wrapper,
-    )
+    if run_state is None:
+        run_state = RunState(
+            input=task,
+            last_agent=agent,
+            max_steps=effective_max_steps,
+            max_turns=effective_max_turns,
+            context_wrapper=context_wrapper,
+        )
+    else:
+        run_state.last_agent = agent
+        if run_state.input is None:
+            run_state.input = task
+        if run_state.max_steps is None:
+            run_state.max_steps = effective_max_steps
+        if run_state.max_turns is None:
+            run_state.max_turns = effective_max_turns
     # 每次 run 创建上下文后立刻触发 on_agent_start
 
     emit_agent_start(lifecycle_hooks, context_wrapper, agent)
@@ -353,12 +430,41 @@ def _run_agent_loop_impl(
     step_number = run_state.next_step_number()
 
     # 如果输入被拦截 直接终止
-    if _run_input_guardrails(agent, task, run_state, step_number, input_guardrails):
+    if (
+        not is_resuming
+        and _run_input_guardrails(agent, task, run_state, step_number, input_guardrails)
+    ):
         record_run_stopped(run_state, step_number, "input_guardrail_triggered")
         emit_agent_end(lifecycle_hooks, context_wrapper, agent, run_state.final_answer)
         return _build_result_and_save_session(config, run_state)
 
     session_messages = _session_messages(config)
+    if is_resuming and run_state.pending_tool_calls:
+        resume_result = resume_pending_tool_approvals(
+            agent,
+            run_state,
+            tool_use_behavior=effective_tool_use_behavior,
+            hooks=lifecycle_hooks,
+            finalize_output=not output_guardrails,
+            trace_include_sensitive_data=(
+                config.trace_include_sensitive_data if config is not None else True
+            ),
+            default_execution_limits=effective_tool_execution_limits,
+        )
+        if resume_result.has_pending_approvals:
+            record_run_stopped(
+                run_state,
+                run_state.next_step_number(),
+                "tool_approval_required",
+            )
+            emit_agent_end(
+                lifecycle_hooks,
+                context_wrapper,
+                agent,
+                run_state.final_answer,
+            )
+            return _build_result_and_save_session(config, run_state)
+
     while True:
         step_number = run_state.next_step_number()
         limit_reason = run_state.next_limit_reason()
@@ -405,7 +511,7 @@ def _run_agent_loop_impl(
                     model_turn,
                     execution_plan,
                 ) or resolve_model_response_step(processed_response)
-                tool_calls = execution_plan.actions
+                tool_calls = _tool_calls_selected_for_execution(execution_plan)
             except Exception as exc:
                 emit_error(lifecycle_hooks, context_wrapper, agent, exc)
                 record_model_error(
@@ -450,6 +556,7 @@ def _run_agent_loop_impl(
 
             handoff_happened = False
             guardrail_happened = False
+            stopped_happened = False
             handoff_outcome = None
             handoff_step = None
             run_again_step = None
@@ -523,31 +630,32 @@ def _run_agent_loop_impl(
                 '''
                 
                 tool_final_step = resolve_tool_final_output_step(model_turn, tool_outcome)
-                if (
-                    tool_final_step is not None
-                    and isinstance(tool_final_step.next_step, NextStepFinalOutput)
-                ):
-                    if output_guardrails:
-                        final_output = tool_final_step.next_step.final_output
-                        if _run_output_guardrails(
-                            agent,
-                            final_output,
-                            run_state,
-                            step_number,
-                            output_guardrails,
-                        ):
-                            record_run_stopped(
+                if tool_final_step is not None:
+                    if isinstance(tool_final_step.next_step, NextStepStopped):
+                        stopped_happened = True
+                        break
+                    if isinstance(tool_final_step.next_step, NextStepFinalOutput):
+                        if output_guardrails:
+                            final_output = tool_final_step.next_step.final_output
+                            if _run_output_guardrails(
+                                agent,
+                                final_output,
                                 run_state,
                                 step_number,
-                                "output_guardrail_triggered",
+                                output_guardrails,
+                            ):
+                                record_run_stopped(
+                                    run_state,
+                                    step_number,
+                                    "output_guardrail_triggered",
+                                )
+                                guardrail_happened = True
+                                break
+                            record_final_output(
+                                run_state,
+                                step_number,
+                                final_output,
                             )
-                            guardrail_happened = True
-                            break
-                        record_final_output(
-                            run_state,
-                            step_number,
-                            final_output,
-                        )
                     break
 
                 run_again_step = resolve_tool_run_again_step(model_turn, tool_outcome)
@@ -581,7 +689,12 @@ def _run_agent_loop_impl(
             ):
                 continue
 
-            if run_state.reached_final_answer or handoff_happened or guardrail_happened:
+            if (
+                run_state.reached_final_answer
+                or handoff_happened
+                or guardrail_happened
+                or stopped_happened
+            ):
                 break
 
     emit_agent_end(lifecycle_hooks, context_wrapper, agent, run_state.final_answer)

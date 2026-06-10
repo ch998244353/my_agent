@@ -21,6 +21,7 @@ from agents import (  # noqa: E402
     ModelSettings,
     OpenAIResponsesModel,
     ToolArgument,
+    ToolCall,
     ToolSpec,
 )
 from agents.models import (  # noqa: E402
@@ -285,6 +286,54 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
 
         self.assertIn("missing string call_id", str(raised.exception))
 
+    def test_response_items_to_tool_calls_preserves_function_call_order(self) -> None:
+        import agents.models as models
+
+        self.assertTrue(hasattr(models, "response_items_to_tool_calls"))
+        tool_calls = models.response_items_to_tool_calls(
+            [
+                {
+                    "type": "function_call",
+                    "name": "read_file",
+                    "arguments": "{\"path\": \"PLAN.md\"}",
+                    "call_id": "call_read",
+                },
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Need file."}],
+                },
+                {
+                    "type": "function_call",
+                    "name": "run_tests",
+                    "arguments": "{\"target\": \"my_agent.tests\"}",
+                    "call_id": "call_test",
+                },
+            ]
+        )
+
+        self.assertEqual(
+            [tool_call.tool_name for tool_call in tool_calls],
+            ["read_file", "run_tests"],
+        )
+        self.assertEqual(
+            [tool_call.call_id for tool_call in tool_calls],
+            ["call_read", "call_test"],
+        )
+
+    def test_response_item_to_tool_call_reports_tool_name_for_invalid_arguments(self) -> None:
+        with self.assertRaises(ModelResponseParseError) as raised:
+            response_item_to_tool_call(
+                {
+                    "type": "function_call",
+                    "name": "get_weather",
+                    "arguments": "[1, 2]",
+                    "call_id": "call_1",
+                }
+            )
+
+        self.assertIn("get_weather", str(raised.exception))
+        self.assertIn("JSON object", str(raised.exception))
+
     def test_tool_call_output_to_response_input_keeps_call_id(self) -> None:
         response_item = tool_call_output_to_response_input(
             tool_call=response_item_to_tool_call(
@@ -306,6 +355,19 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
                 "output": "Weather in Shanghai: 18C and cloudy.",
             },
         )
+
+    def test_tool_call_output_to_response_input_requires_call_id(self) -> None:
+        with self.assertRaises(ModelResponseParseError) as raised:
+            tool_call_output_to_response_input(
+                ToolCall(
+                    tool_name="get_weather",
+                    arguments={"city": "Shanghai"},
+                    call_id="",
+                ),
+                output="Weather in Shanghai: 18C and cloudy.",
+            )
+
+        self.assertIn("call_id", str(raised.exception))
 
     def test_response_schema_to_text_format_builds_json_schema_format(self) -> None:
         schema = {
@@ -641,6 +703,54 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
             },
         )
 
+    def test_openai_responses_model_sends_include_with_text_format_and_verbosity(self) -> None:
+        self.assertTrue(hasattr(ModelSettings(), "response_include"))
+        fake_client = FakeOpenAIClient(
+            output=[
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "{\"answer\": \"ok\"}"}],
+                }
+            ]
+        )
+        response_schema = {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        }
+        model = OpenAIResponsesModel(
+            model="gpt-test",
+            client=fake_client,
+            response_schema=response_schema,
+            response_schema_name="mini_agent_answer",
+        )
+
+        model.get_response(
+            messages=[ChatMessage(role="user", content="Answer as JSON.")],
+            tool_specs=[],
+            model_settings=ModelSettings(
+                verbosity="high",
+                response_include=("message.output_text.logprobs",),
+            ),
+        )
+
+        request = fake_client.responses.last_request
+        self.assertEqual(request["include"], ["message.output_text.logprobs"])
+        self.assertNotIn("response_format", request)
+        self.assertEqual(
+            request["text"],
+            {
+                "format": {
+                    "type": "json_schema",
+                    "name": "mini_agent_answer",
+                    "schema": response_schema,
+                    "strict": True,
+                },
+                "verbosity": "high",
+            },
+        )
+
     def test_openai_responses_model_sends_response_schema_as_text_format(self) -> None:
         fake_client = FakeOpenAIClient(
             output=[
@@ -690,13 +800,27 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
         self.assertEqual(model.last_output_text, "{\"answer\": \"No tool needed.\"}")
 
     def test_openai_responses_model_records_safe_request_summary(self) -> None:
+        import agents.models as models
+
+        self.assertTrue(hasattr(models, "response_usage"))
+        self.assertTrue(hasattr(models, "response_request_id"))
         fake_client = FakeOpenAIClient(
             output=[
                 {
                     "type": "message",
                     "content": [{"type": "output_text", "text": "{\"answer\": \"ok\"}"}],
                 }
-            ]
+            ],
+            response_fields={
+                "_request_id": "req_123",
+                "usage": {
+                    "input_tokens": 12,
+                    "output_tokens": 5,
+                    "total_tokens": 17,
+                    "input_tokens_details": {"cached_tokens": 3},
+                    "output_tokens_details": {"reasoning_tokens": 1},
+                },
+            },
         )
         response_schema = {
             "type": "object",
@@ -721,21 +845,85 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
                 ChatMessage(role="user", content="my secret account is 123"),
             ],
             tool_specs=[tool_spec],
+            model_settings=ModelSettings(
+                store=False,
+                response_include=("message.output_text.logprobs",),
+            ),
         )
 
         self.assertEqual(
             model.last_request_summary,
             {
                 "model": "gpt-test",
-                "input_count": 2,
+                "input_count": 1,
                 "tool_count": 1,
                 "has_schema": True,
                 "uses_previous_response_id": False,
+                "has_instructions": True,
+                "store": False,
+                "include_count": 1,
             },
         )
         summary_text = str(model.last_request_summary)
         self.assertNotIn("my secret account is 123", summary_text)
         self.assertNotIn("lookup_secret", summary_text)
+        self.assertNotIn("message.output_text.logprobs", summary_text)
+
+    def test_openai_responses_model_returns_usage_and_request_metadata(self) -> None:
+        usage = {
+            "input_tokens": 20,
+            "output_tokens": 7,
+            "total_tokens": 27,
+            "input_tokens_details": {"cached_tokens": 4},
+            "output_tokens_details": {"reasoning_tokens": 2},
+        }
+        fake_client = FakeOpenAIClient(
+            output=[
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Ready."}],
+                }
+            ],
+            response_fields={"usage": usage, "_request_id": "req_meta"},
+        )
+        model = OpenAIResponsesModel(model="gpt-test", client=fake_client)
+
+        response = model.get_response(
+            messages=[ChatMessage(role="user", content="Inspect the repo.")],
+            tool_specs=[],
+        )
+
+        self.assertEqual(response.usage, usage)
+        self.assertEqual(response.request_id, "req_meta")
+        self.assertEqual(response.request_summary, model.last_request_summary)
+
+    def test_openai_responses_model_sends_system_message_as_instructions(self) -> None:
+        fake_client = FakeOpenAIClient(
+            output=[
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Ready."}],
+                }
+            ]
+        )
+        model = OpenAIResponsesModel(model="gpt-test", client=fake_client)
+
+        model.get_response(
+            messages=[
+                ChatMessage(role="system", content="You are a coding agent."),
+                ChatMessage(role="user", content="Inspect the repo."),
+            ],
+            tool_specs=[],
+        )
+
+        self.assertEqual(
+            fake_client.responses.last_request["instructions"],
+            "You are a coding agent.",
+        )
+        self.assertEqual(
+            fake_client.responses.last_request["input"],
+            [{"role": "user", "content": "Inspect the repo."}],
+        )
 
     def test_openai_responses_model_uses_local_history_for_plain_chat_turns(self) -> None:
         fake_client = FakeOpenAIClient(
@@ -859,7 +1047,305 @@ class OpenAIResponsesModelTestCase(unittest.TestCase):
                 "tool_count": 1,
                 "has_schema": False,
                 "uses_previous_response_id": True,
+                "has_instructions": False,
+                "store": None,
+                "include_count": 0,
             },
+        )
+
+    def test_openai_responses_model_keeps_pending_tool_output_when_response_parse_fails(self) -> None:
+        fake_client = FakeOpenAIClient(
+            output=[
+                {
+                    "type": "function_call",
+                    "name": "broken_tool",
+                    "arguments": "[1, 2]",
+                    "call_id": "call_broken",
+                }
+            ],
+            response_id="resp_broken",
+        )
+        model = OpenAIResponsesModel(model="gpt-test", client=fake_client)
+        model.previous_response_id = "resp_previous"
+        tool_call = ToolCall(
+            tool_name="get_weather",
+            arguments={"city": "Shanghai"},
+            call_id="call_1",
+        )
+        model.record_tool_output(tool_call, "Weather in Shanghai: 18C and cloudy.")
+        expected_pending = list(model.pending_tool_outputs)
+
+        with self.assertRaises(ModelResponseParseError):
+            model.get_response(
+                messages=[ChatMessage(role="user", content="Continue.")],
+                tool_specs=[],
+            )
+
+        self.assertEqual(model.pending_tool_outputs, expected_pending)
+
+    def test_openai_responses_model_resends_instructions_with_previous_response_id(self) -> None:
+        fake_client = FakeOpenAIClient(
+            output=[
+                [
+                    {
+                        "type": "function_call",
+                        "name": "get_weather",
+                        "arguments": "{\"city\": \"Shanghai\"}",
+                        "call_id": "call_1",
+                    }
+                ],
+                [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Shanghai is 18C and cloudy.",
+                            }
+                        ],
+                    }
+                ],
+            ],
+            response_id="resp_weather",
+        )
+        model = OpenAIResponsesModel(model="gpt-test", client=fake_client)
+        tool_spec = ToolSpec(
+            name="get_weather",
+            description="Get weather for a city.",
+            arguments=[
+                ToolArgument(
+                    name="city",
+                    description="City name.",
+                    schema={"type": "string"},
+                )
+            ],
+            returns="string",
+        )
+
+        tool_call = model.decide(
+            messages=[
+                ChatMessage(role="system", content="You are a coding agent."),
+                ChatMessage(role="user", content="Weather in Shanghai?"),
+            ],
+            tool_specs=[tool_spec],
+        )
+        model.record_tool_output(tool_call, "Weather in Shanghai: 18C and cloudy.")
+        model.decide(
+            messages=[
+                ChatMessage(role="system", content="You are a coding agent."),
+                ChatMessage(role="user", content="Weather in Shanghai?"),
+                ChatMessage(
+                    role="tool_response",
+                    content="Observation:\nWeather in Shanghai: 18C and cloudy.",
+                ),
+            ],
+            tool_specs=[tool_spec],
+        )
+
+        second_request = fake_client.responses.requests[1]
+        self.assertEqual(second_request["previous_response_id"], "resp_weather_1")
+        self.assertEqual(second_request["instructions"], "You are a coding agent.")
+        self.assertEqual(
+            second_request["input"],
+            [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "Weather in Shanghai: 18C and cloudy.",
+                }
+            ],
+        )
+
+    def test_openai_responses_model_does_not_use_previous_response_id_when_store_false(self) -> None:
+        fake_client = FakeOpenAIClient(
+            output=[
+                [
+                    {
+                        "type": "function_call",
+                        "name": "get_weather",
+                        "arguments": "{\"city\": \"Shanghai\"}",
+                        "call_id": "call_1",
+                    }
+                ],
+                [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Shanghai is 18C and cloudy.",
+                            }
+                        ],
+                    }
+                ],
+            ],
+            response_id="resp_weather",
+        )
+        model = OpenAIResponsesModel(model="gpt-test", client=fake_client)
+        tool_spec = ToolSpec(
+            name="get_weather",
+            description="Get weather for a city.",
+            arguments=[
+                ToolArgument(
+                    name="city",
+                    description="City name.",
+                    schema={"type": "string"},
+                )
+            ],
+            returns="string",
+        )
+
+        first_response = model.get_response(
+            messages=[
+                ChatMessage(role="system", content="You are a coding agent."),
+                ChatMessage(role="user", content="Weather in Shanghai?"),
+            ],
+            tool_specs=[tool_spec],
+        )
+        model.record_tool_output(
+            first_response.tool_calls[0],
+            "Weather in Shanghai: 18C and cloudy.",
+        )
+        model.get_response(
+            messages=[
+                ChatMessage(role="system", content="You are a coding agent."),
+                ChatMessage(role="user", content="Weather in Shanghai?"),
+                ChatMessage(
+                    role="tool_response",
+                    content="Observation:\nWeather in Shanghai: 18C and cloudy.",
+                ),
+            ],
+            tool_specs=[tool_spec],
+            model_settings=ModelSettings(store=False),
+        )
+
+        second_request = fake_client.responses.requests[1]
+        self.assertNotIn("previous_response_id", second_request)
+        self.assertFalse(second_request["store"])
+        self.assertEqual(second_request["instructions"], "You are a coding agent.")
+        self.assertEqual(
+            second_request["input"],
+            [
+                {"role": "user", "content": "Weather in Shanghai?"},
+                {
+                    "role": "user",
+                    "content": "Observation:\nWeather in Shanghai: 18C and cloudy.",
+                },
+            ],
+        )
+
+    def test_openai_responses_model_manual_state_policy_replays_local_input(self) -> None:
+        import agents.models as models
+
+        self.assertTrue(hasattr(models, "ResponseStatePolicy"))
+        fake_client = FakeOpenAIClient(
+            output=[
+                [
+                    {
+                        "type": "function_call",
+                        "name": "get_weather",
+                        "arguments": "{\"city\": \"Shanghai\"}",
+                        "call_id": "call_1",
+                    }
+                ],
+                [
+                    {
+                        "type": "message",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Shanghai is 18C and cloudy.",
+                            }
+                        ],
+                    }
+                ],
+            ],
+            response_id="resp_weather",
+        )
+        model = OpenAIResponsesModel(
+            model="gpt-test",
+            client=fake_client,
+            state_policy=models.ResponseStatePolicy(mode="manual_items"),
+        )
+        tool_spec = ToolSpec(
+            name="get_weather",
+            description="Get weather for a city.",
+            arguments=[
+                ToolArgument(
+                    name="city",
+                    description="City name.",
+                    schema={"type": "string"},
+                )
+            ],
+            returns="string",
+        )
+
+        first_response = model.get_response(
+            messages=[
+                ChatMessage(role="system", content="You are a coding agent."),
+                ChatMessage(role="user", content="Weather in Shanghai?"),
+            ],
+            tool_specs=[tool_spec],
+        )
+        model.record_tool_output(
+            first_response.tool_calls[0],
+            "Weather in Shanghai: 18C and cloudy.",
+        )
+        model.get_response(
+            messages=[
+                ChatMessage(role="system", content="You are a coding agent."),
+                ChatMessage(role="user", content="Weather in Shanghai?"),
+                ChatMessage(
+                    role="tool_response",
+                    content="Observation:\nWeather in Shanghai: 18C and cloudy.",
+                ),
+            ],
+            tool_specs=[tool_spec],
+        )
+
+        second_request = fake_client.responses.requests[1]
+        self.assertNotIn("previous_response_id", second_request)
+        self.assertEqual(second_request["instructions"], "You are a coding agent.")
+        self.assertEqual(
+            second_request["input"],
+            [
+                {"role": "user", "content": "Weather in Shanghai?"},
+                {
+                    "role": "user",
+                    "content": "Observation:\nWeather in Shanghai: 18C and cloudy.",
+                },
+            ],
+        )
+
+    def test_openai_responses_model_uses_state_policy_include_when_settings_omit_include(
+        self,
+    ) -> None:
+        import agents.models as models
+
+        fake_client = FakeOpenAIClient(
+            output=[
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Ready."}],
+                }
+            ]
+        )
+        model = OpenAIResponsesModel(
+            model="gpt-test",
+            client=fake_client,
+            state_policy=models.ResponseStatePolicy(
+                include=("reasoning.encrypted_content",),
+            ),
+        )
+
+        model.get_response(
+            messages=[ChatMessage(role="user", content="Keep reasoning state.")],
+            tool_specs=[],
+        )
+
+        self.assertEqual(
+            fake_client.responses.last_request["include"],
+            ["reasoning.encrypted_content"],
         )
 
 

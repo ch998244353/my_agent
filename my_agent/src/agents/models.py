@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from inspect import Parameter, signature
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from .contracts import ChatMessage, ModelResponse, ToolCall, ToolSpec
 from .model_settings import ModelSettings
@@ -58,6 +58,13 @@ class ModelResponseStatusError(ModelResponseError):
 class ModelCallError(ModelResponseError):
     def __init__(self, original: BaseException) -> None:
         super().__init__(format_model_error(original), original=original)
+
+
+@dataclass(frozen=True)
+class ResponseStatePolicy:
+    mode: Literal["manual_items", "previous_response_id"] = "previous_response_id"
+    store: bool = True
+    include: tuple[str, ...] = ()
 
 
 def _accepts_model_settings(get_response: Any) -> bool:
@@ -130,6 +137,88 @@ def chat_message_to_response_input(message: ChatMessage) -> dict[str, str]:
     return {"role": "user", "content": message.content}
 
 
+def response_instructions_from_messages(messages: list[ChatMessage]) -> str | None:
+    instructions = [
+        message.content
+        for message in messages
+        if message.role == "system" and message.content
+    ]
+    if not instructions:
+        return None
+    return "\n\n".join(instructions)
+
+
+def response_input_from_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
+    return [
+        chat_message_to_response_input(message)
+        for message in messages
+        if message.role != "system"
+    ]
+
+
+def response_state_store_enabled(
+    state_policy: ResponseStatePolicy,
+    model_settings: ModelSettings | None,
+) -> bool:
+    if model_settings is not None and model_settings.store is not None:
+        return model_settings.store
+    return state_policy.store
+
+
+def build_response_request_kwargs(
+    *,
+    model: str,
+    messages: list[ChatMessage],
+    tool_specs: list[ToolSpec],
+    pending_tool_outputs: list[dict[str, str]],
+    previous_response_id: str | None,
+    state_policy: ResponseStatePolicy,
+    response_schema: dict[str, Any] | None,
+    response_schema_name: str,
+    response_schema_strict: bool,
+    model_settings: ModelSettings | None,
+) -> dict[str, Any]:
+    store_enabled = response_state_store_enabled(state_policy, model_settings)
+    # 普通聊天依赖本地 history；工具结果续接只有在策略允许且服务端保存状态时才用 previous_response_id。
+    use_previous_response_id = (
+        state_policy.mode == "previous_response_id"
+        and store_enabled
+        and previous_response_id is not None
+        and bool(pending_tool_outputs)
+    )
+    if use_previous_response_id:
+        response_input: list[dict[str, Any]] = list(pending_tool_outputs)
+    else:
+        response_input = response_input_from_messages(messages)
+
+    tools = [tool_spec_to_openai_tool(tool_spec) for tool_spec in tool_specs]
+    request_kwargs: dict[str, Any] = {
+        "model": model,
+        "input": response_input,
+        "tools": tools,
+        "tool_choice": "auto",
+    }
+
+    instructions = response_instructions_from_messages(messages)
+    if instructions is not None:
+        request_kwargs["instructions"] = instructions
+    if response_schema is not None:
+        request_kwargs["text"] = response_schema_to_text_format(
+            name=response_schema_name,
+            schema=response_schema,
+            strict=response_schema_strict,
+        )
+    _apply_model_settings(request_kwargs, model_settings)
+    if "include" not in request_kwargs and state_policy.include:
+        request_kwargs["include"] = list(state_policy.include)
+    if not state_policy.store and "store" not in request_kwargs:
+        request_kwargs["store"] = False
+
+    if use_previous_response_id:
+        request_kwargs["previous_response_id"] = previous_response_id
+    return request_kwargs
+
+
 def _get_field(item: Any, field_name: str) -> Any:
     if isinstance(item, dict):
         return item.get(field_name)
@@ -184,6 +273,13 @@ def parse_tool_call_arguments(arguments: Any) -> dict[str, Any]:
     return parsed_arguments
 
 
+def response_item_type(item: Any) -> str | None:
+    item_type = _get_field(item, "type")
+    if isinstance(item_type, str) and item_type:
+        return item_type
+    return None
+
+
 def _response_problem_text(problem: Any) -> str | None:
     if problem is None:
         return None
@@ -213,11 +309,7 @@ def validate_response_status(response: Any) -> None:
     raise ModelResponseStatusError(f"Model response was not completed{detail_text}.")
 
 
-# 从模型返回的 output item 中解析出 ToolCall；如果不是 function_call 就返回 None。
-def response_item_to_tool_call(item: Any) -> ToolCall | None:
-    if _get_field(item, "type") != "function_call":
-        return None
-
+def function_call_item_to_tool_call(item: Any) -> ToolCall:
     tool_name = _get_field(item, "name")
     if not isinstance(tool_name, str) or not tool_name:
         raise ModelResponseParseError("Function tool call is missing string name.")
@@ -226,7 +318,12 @@ def response_item_to_tool_call(item: Any) -> ToolCall | None:
     if not isinstance(call_id, str) or not call_id:
         raise ModelResponseParseError("Function tool call is missing string call_id.")
 
-    parsed_arguments = parse_tool_call_arguments(_get_field(item, "arguments"))
+    try:
+        parsed_arguments = parse_tool_call_arguments(_get_field(item, "arguments"))
+    except ModelResponseParseError as exc:
+        raise ModelResponseParseError(
+            f"Function tool call {tool_name!r} has invalid arguments: {exc}"
+        ) from exc
 
     return ToolCall(
         tool_name=tool_name,
@@ -234,11 +331,38 @@ def response_item_to_tool_call(item: Any) -> ToolCall | None:
         call_id=call_id,
     )
 
+
+# 从模型返回的 output item 中解析出 ToolCall；如果不是 function_call 就返回 None。
+def response_item_to_tool_call(item: Any) -> ToolCall | None:
+    if response_item_type(item) != "function_call":
+        return None
+    return function_call_item_to_tool_call(item)
+
+
+def response_items_to_tool_calls(items: list[Any]) -> list[ToolCall]:
+    return [
+        function_call_item_to_tool_call(item)
+        for item in items
+        if response_item_type(item) == "function_call"
+    ]
+
+
+def tool_call_response_call_id(tool_call: ToolCall) -> str:
+    call_id = getattr(tool_call, "call_id", None)
+    if not isinstance(call_id, str) or not call_id.strip():
+        tool_name = getattr(tool_call, "tool_name", "<unknown>")
+        raise ModelResponseParseError(
+            f"Tool call {tool_name!r} is missing string call_id."
+        )
+    return call_id
+
+
 # 具执行结果转换成 OpenAI Responses API 需要的 function_call_output 格式
 def tool_call_output_to_response_input(tool_call: ToolCall, output: Any) -> dict[str, str]:
+    call_id = tool_call_response_call_id(tool_call)
     return {
         "type": "function_call_output",
-        "call_id": tool_call.call_id,
+        "call_id": call_id,
         "output": str(output),
     }
 
@@ -281,6 +405,8 @@ def _apply_model_settings(
     if model_settings.verbosity is not None:
         text_format = request_kwargs.setdefault("text", {})
         text_format["verbosity"] = model_settings.verbosity
+    if model_settings.response_include is not None:
+        request_kwargs["include"] = list(model_settings.response_include)
 
 
 # 从模型 response 中提取最终文本 output_text；如果没有直接字段，就从 output.content.text 里拼接。
@@ -314,6 +440,47 @@ def response_refusal_text(response: Any) -> str | None:
     return None
 
 
+def _metadata_to_plain(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _metadata_to_plain(item) for key, item in value.items()}
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if isinstance(dumped, dict):
+            return _metadata_to_plain(dumped)
+    return value
+
+
+def response_usage(response: Any) -> dict[str, Any] | None:
+    usage = _get_field(response, "usage")
+    if usage is None:
+        return None
+    usage_payload = _metadata_to_plain(usage)
+    if isinstance(usage_payload, dict):
+        return usage_payload
+
+    usage_summary: dict[str, Any] = {}
+    for field_name in (
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "input_tokens_details",
+        "output_tokens_details",
+    ):
+        field_value = _get_field(usage, field_name)
+        if field_value is not None:
+            usage_summary[field_name] = _metadata_to_plain(field_value)
+    return usage_summary or None
+
+
+def response_request_id(response: Any) -> str | None:
+    for field_name in ("_request_id", "request_id"):
+        request_id = _get_field(response, field_name)
+        if isinstance(request_id, str) and request_id:
+            return request_id
+    return None
+
+
 def _count_request_items(value: Any) -> int:
     if value is None:
         return 0
@@ -330,6 +497,9 @@ def _request_summary(request_kwargs: dict[str, Any]) -> dict[str, Any]:
         "tool_count": len(request_kwargs.get("tools") or []),
         "has_schema": isinstance(text_format, dict) and "format" in text_format,
         "uses_previous_response_id": "previous_response_id" in request_kwargs,
+        "has_instructions": "instructions" in request_kwargs,
+        "store": request_kwargs.get("store"),
+        "include_count": _count_request_items(request_kwargs.get("include")),
     }
 
 
@@ -347,6 +517,7 @@ class OpenAIResponsesModel:
     last_request_summary: dict[str, Any] | None = None
     previous_response_id: str | None = None
     pending_tool_outputs: list[dict[str, str]] = field(default_factory=list)
+    state_policy: ResponseStatePolicy = field(default_factory=ResponseStatePolicy)
 
     def __post_init__(self) -> None:
         if self.client is not None:
@@ -384,38 +555,20 @@ class OpenAIResponsesModel:
         tool_specs: list[ToolSpec],
         model_settings: ModelSettings | None = None,
     ) -> ModelResponse:
-        use_previous_response_id = (
-            self.previous_response_id is not None and bool(self.pending_tool_outputs)
+        request_kwargs = build_response_request_kwargs(
+            model=self.model,
+            messages=messages,
+            tool_specs=tool_specs,
+            pending_tool_outputs=self.pending_tool_outputs,
+            previous_response_id=self.previous_response_id,
+            state_policy=self.state_policy,
+            response_schema=self.response_schema,
+            response_schema_name=self.response_schema_name,
+            response_schema_strict=self.response_schema_strict,
+            model_settings=model_settings,
         )
-        # 普通聊天依赖本地 history；工具结果续接才用 previous_response_id 关联上一轮 function_call。
-        if use_previous_response_id:
-            response_input = list(self.pending_tool_outputs)
-        else:
-            response_input = [
-                chat_message_to_response_input(message) for message in messages
-            ]
-
-        tools = [tool_spec_to_openai_tool(tool_spec) for tool_spec in tool_specs]
-        self.last_input = response_input
-        self.last_tools = tools
-
-        request_kwargs: dict[str, Any] = {
-            "model": self.model,
-            "input": response_input,
-            "tools": tools,
-            "tool_choice": "auto",
-        }
-
-        if self.response_schema is not None:
-            request_kwargs["text"] = response_schema_to_text_format(
-                name=self.response_schema_name,
-                schema=self.response_schema,
-                strict=self.response_schema_strict,
-            )
-        _apply_model_settings(request_kwargs, model_settings)
-
-        if use_previous_response_id:
-            request_kwargs["previous_response_id"] = self.previous_response_id
+        self.last_input = list(request_kwargs["input"])
+        self.last_tools = list(request_kwargs["tools"])
         self.last_request_summary = _request_summary(request_kwargs)
 
         if self.client is None:
@@ -426,18 +579,14 @@ class OpenAIResponsesModel:
         validate_response_status(response)
         self.last_output_text = response_output_text(response)
         refusal = response_refusal_text(response)
-        self.previous_response_id = (
-            _get_field(response, "id") or self.previous_response_id
-        )
-        self.pending_tool_outputs.clear()
+        usage = response_usage(response)
+        request_id = response_request_id(response)
 
         output = list(_iter_response_output(response))
-        tool_calls = [
-            tool_call
-            for item in output
-            if (tool_call := response_item_to_tool_call(item)) is not None
-        ]
+        tool_calls = response_items_to_tool_calls(output)
         response_id = _get_field(response, "id")
+        self.previous_response_id = response_id or self.previous_response_id
+        self.pending_tool_outputs.clear()
 
         return ModelResponse(
             response_id=response_id,
@@ -446,4 +595,7 @@ class OpenAIResponsesModel:
             tool_calls=tool_calls,
             refusal=refusal,
             raw=response,
+            usage=usage,
+            request_summary=dict(self.last_request_summary or {}),
+            request_id=request_id,
         )

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import sys
 import unittest
-from dataclasses import fields
+from dataclasses import asdict, fields
 from pathlib import Path
+import json
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -14,10 +15,138 @@ if str(SRC_DIR) not in sys.path:
 
 from agents import Agent, AgentMemory, ModelResponse, RunItem, RunState, ToolCall  # noqa: E402
 from agents.result import RunResult  # noqa: E402
-from agents.run_state import build_run_result  # noqa: E402
+from agents.run_state import ApprovalSnapshot, RunStateSnapshot, build_run_result  # noqa: E402
 
 
 class RunStateTestCase(unittest.TestCase):
+    def test_approval_snapshot_is_pure_data_and_keeps_tool_arguments(self) -> None:
+        approval = ApprovalSnapshot(
+            tool_name="delete_file",
+            call_id="call_1",
+            arguments={"path": "tmp.txt"},
+            status="pending",
+            reason="User approval is required before running this tool.",
+        )
+
+        payload = asdict(approval)
+
+        self.assertEqual(
+            payload,
+            {
+                "tool_name": "delete_file",
+                "call_id": "call_1",
+                "arguments": {"path": "tmp.txt"},
+                "status": "pending",
+                "reason": "User approval is required before running this tool.",
+                "rejection_message": None,
+            },
+        )
+        json.dumps(payload)
+
+    def test_run_state_snapshot_is_pure_data_without_runtime_objects(self) -> None:
+        approval = ApprovalSnapshot(
+            tool_name="delete_file",
+            call_id="call_1",
+            arguments={"path": "tmp.txt"},
+            status="pending",
+        )
+        snapshot = RunStateSnapshot(
+            input="delete tmp.txt",
+            last_agent_name="Planner",
+            last_response_id="resp_1",
+            current_turn=1,
+            steps_taken=0,
+            max_turns=4,
+            max_steps=5,
+            tool_approvals=(approval,),
+            model_responses=({"response_id": "resp_1", "output": []},),
+            new_items=(
+                {
+                    "item_type": "tool_approval_required",
+                    "step_number": 1,
+                    "payload": {"call_id": "call_1"},
+                },
+            ),
+        )
+
+        snapshot_fields = {field.name for field in fields(RunStateSnapshot)}
+        payload = asdict(snapshot)
+
+        self.assertNotIn("last_agent", snapshot_fields)
+        self.assertNotIn("context_wrapper", snapshot_fields)
+        self.assertEqual(payload["tool_approvals"][0]["arguments"], {"path": "tmp.txt"})
+        json.dumps(payload)
+
+    def test_run_state_from_snapshot_restores_counters_approvals_and_tool_calls(self) -> None:
+        agent = Agent(memory=AgentMemory(), model=object(), name="Planner")
+        snapshot = RunStateSnapshot(
+            input="delete files",
+            last_agent_name="Planner",
+            last_response_id="resp_1",
+            current_turn=2,
+            steps_taken=1,
+            max_turns=4,
+            max_steps=5,
+            tool_approvals=(
+                ApprovalSnapshot(
+                    tool_name="delete_file",
+                    call_id="call_1",
+                    arguments={"path": "pending.txt"},
+                    status="pending",
+                    reason="Needs approval.",
+                ),
+                ApprovalSnapshot(
+                    tool_name="delete_file",
+                    call_id="call_2",
+                    arguments={"path": "approved.txt"},
+                    status="approved",
+                    reason="Needs approval.",
+                ),
+                ApprovalSnapshot(
+                    tool_name="delete_file",
+                    call_id="call_3",
+                    arguments={"path": "rejected.txt"},
+                    status="rejected",
+                    reason="Needs approval.",
+                    rejection_message="Outside workspace.",
+                ),
+            ),
+            model_responses=({"response_id": "resp_1", "output": []},),
+            new_items=(
+                {
+                    "item_type": "tool_approval_required",
+                    "step_number": 1,
+                    "payload": {"call_id": "call_1"},
+                    "metadata": {},
+                },
+            ),
+        )
+        persisted_state = json.loads(json.dumps(asdict(snapshot)))
+
+        run_state = RunState.from_snapshot(persisted_state, agent=agent)
+
+        self.assertEqual(run_state.input, "delete files")
+        self.assertIs(run_state.last_agent, agent)
+        self.assertEqual(run_state.current_turn, 2)
+        self.assertEqual(run_state.steps_taken, 1)
+        self.assertEqual(run_state.max_turns, 4)
+        self.assertEqual(run_state.max_steps, 5)
+        self.assertEqual(run_state.context_wrapper.approval_status_for("delete_file", "call_1"), "pending")
+        self.assertEqual(run_state.context_wrapper.approval_status_for("delete_file", "call_2"), "approved")
+        self.assertEqual(run_state.context_wrapper.approval_status_for("delete_file", "call_3"), "rejected")
+        self.assertEqual(
+            run_state.context_wrapper.rejection_message_for("delete_file", "call_3"),
+            "Outside workspace.",
+        )
+        self.assertEqual(
+            run_state.pending_tool_calls,
+            (
+                ToolCall("delete_file", {"path": "pending.txt"}, "call_1"),
+                ToolCall("delete_file", {"path": "approved.txt"}, "call_2"),
+                ToolCall("delete_file", {"path": "rejected.txt"}, "call_3"),
+            ),
+        )
+
     def test_run_state_keeps_process_items_not_legacy_result_fields(self) -> None:
         run_state_fields = {field.name for field in fields(RunState)}
 

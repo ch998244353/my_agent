@@ -16,6 +16,7 @@ from .chat_runtime import (
     build_chat_runtime,
     build_chat_session,
 )
+from .coding_agent import CodingAgentProfile, CodingAgentSetup, build_coding_agent
 from .contracts import (
     AgentRunResult,
     ChatMessage,
@@ -79,23 +80,15 @@ from .result import RunResult, RunResultBase
 from .runner import Runner
 from .run_config import RunConfig
 from .run_context import RunContextWrapper
-from .run_state import RunState
-from .run_steps import (
-    MODEL_RETURNED_NO_TOOL_CALL,
-    NextStepFinalOutput,
-    NextStepHandoff,
-    NextStepRunAgain,
-    NextStepStopped,
-    ProcessedResponse,
-    SingleStepResult,
-    ToolExecutionPlan,
-    build_tool_execution_plan,
-)
+from .run_loop import resume_agent_loop
+from .run_resume import ResumeToolApprovalResult, resume_pending_tool_approvals
+from .run_state import ApprovalSnapshot, RunState, RunStateSnapshot
 from .shell_tools import (
     DEFAULT_TEST_COMMAND,
     create_shell_command_tool,
     create_test_command_tool,
 )
+from .tool_planning import ToolExecutionPlan, build_tool_execution_plan
 from .tool_guardrails import (
     ToolGuardrailFunctionOutput,
     ToolInputGuardrail,
@@ -159,6 +152,15 @@ from .tracing import (
     trace,
     turn_span,
 )
+from .turn_resolution import (
+    MODEL_RETURNED_NO_TOOL_CALL,
+    NextStepFinalOutput,
+    NextStepHandoff,
+    NextStepRunAgain,
+    NextStepStopped,
+    ProcessedResponse,
+    SingleStepResult,
+)
 from .tools import (
     FINAL_ANSWER_TOOL_NAME,
     FunctionTool,
@@ -191,6 +193,7 @@ __all__ = [
     "AgentMemory",
     "AgentSession",
     "AgentToolError",
+    "ApprovalSnapshot",
     "ChatMessage",
     "ChatDiagnostics",
     "ChatTurn",
@@ -203,6 +206,8 @@ __all__ = [
     "CommandResult",
     "CodeExecutionError",
     "CodeExecutionResult",
+    "CodingAgentProfile",
+    "CodingAgentSetup",
     "CompactionPolicy",
     "DEFAULT_TEST_COMMAND",
     "Environment",
@@ -245,6 +250,7 @@ __all__ = [
     "RunResult",
     "RunResultBase",
     "RunState",
+    "RunStateSnapshot",
     "RuleBasedSummarizer",
     "Span",
     "SpanData",
@@ -298,6 +304,7 @@ __all__ = [
     "build_chat_agent",
     "build_chat_runtime",
     "build_chat_session",
+    "build_coding_agent",
     "build_tool_execution_plan",
     "clip_tool_text",
     "create_agent_tool",
@@ -344,5 +351,8 @@ __all__ = [
     "parse_structured_output",
     "render_tool_signature",
     "run_chat_turn",
+    "resume_agent_loop",
+    "resume_pending_tool_approvals",
     "tool_to_prompt_text",
+    "ResumeToolApprovalResult",
 ]

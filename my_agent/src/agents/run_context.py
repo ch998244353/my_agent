@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 if TYPE_CHECKING:
+    from .contracts import ToolApprovalRequest
+    from .environment import Environment
+    from .run_state import ApprovalSnapshot
+    from .verification import VerificationRunner
     from .workspace import Workspace
 
 ToolApprovalStatus = Literal["unknown", "pending", "approved", "rejected"]
+ContextValueT = TypeVar("ContextValueT")
+
+CONTEXT_WORKSPACE_KEY = "workspace"
+CONTEXT_ENVIRONMENT_KEY = "environment"
+CONTEXT_VERIFICATION_RUNNER_KEY = "verification_runner"
 
 
 @dataclass
@@ -37,17 +47,39 @@ class RunContextWrapper:
         repr=False,
     )
 
-    @property
-    def workspace(self) -> Workspace | None:
+    def _context_value(
+        self,
+        key: str,
+        expected_type: type[ContextValueT],
+    ) -> ContextValueT | None:
         if not isinstance(self.context, dict):
             return None
 
-        from .workspace import Workspace
-
-        value = self.context.get("workspace")
-        if isinstance(value, Workspace):
+        value = self.context.get(key)
+        if isinstance(value, expected_type):
             return value
         return None
+
+    @property
+    def workspace(self) -> Workspace | None:
+        from .workspace import Workspace
+
+        return self._context_value(CONTEXT_WORKSPACE_KEY, Workspace)
+
+    @property
+    def environment(self) -> Environment | None:
+        from .environment import Environment
+
+        return self._context_value(CONTEXT_ENVIRONMENT_KEY, Environment)
+
+    @property
+    def verification_runner(self) -> VerificationRunner | None:
+        from .verification import VerificationRunner
+
+        return self._context_value(
+            CONTEXT_VERIFICATION_RUNNER_KEY,
+            VerificationRunner,
+        )
 
     @staticmethod
     def _approval_key(tool_name: str, call_id: str) -> tuple[str, str]:
@@ -74,6 +106,47 @@ class RunContextWrapper:
             status="rejected",
             rejection_message=rejection_message,
         )
+
+    def export_tool_approvals(
+        self,
+        approval_requests: Iterable[ToolApprovalRequest],
+    ) -> tuple[ApprovalSnapshot, ...]:
+        from .run_state import ApprovalSnapshot
+
+        snapshots: list[ApprovalSnapshot] = []
+        for request in approval_requests:
+            status = self.approval_status_for(request.tool_name, request.call_id)
+            if status == "unknown":
+                status = "pending"
+            snapshots.append(
+                ApprovalSnapshot(
+                    tool_name=request.tool_name,
+                    call_id=request.call_id,
+                    arguments=dict(request.arguments),
+                    status=status,
+                    reason=request.reason,
+                    rejection_message=self.rejection_message_for(
+                        request.tool_name,
+                        request.call_id,
+                    ),
+                )
+            )
+        return tuple(snapshots)
+
+    def import_tool_approvals(self, approvals: Iterable[ApprovalSnapshot]) -> None:
+        for approval in approvals:
+            if approval.status == "pending":
+                self.request_tool_call_approval(approval.tool_name, approval.call_id)
+            elif approval.status == "approved":
+                self.approve_tool_call(approval.tool_name, approval.call_id)
+            elif approval.status == "rejected":
+                self.reject_tool_call(
+                    approval.tool_name,
+                    approval.call_id,
+                    approval.rejection_message,
+                )
+            else:
+                raise ValueError(f"Unknown approval status: {approval.status!r}")
 
     # 查询审批状态
     def approval_status_for(self, tool_name: str, call_id: str) -> ToolApprovalStatus:

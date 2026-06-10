@@ -18,6 +18,7 @@ class ModelSettings:
     store: bool | None = None  # 控制模型响应是否允许服务端存储
     reasoning: dict[str, Any] | None = None  # 透传 Responses API 的 reasoning 设置
     verbosity: Verbosity | None = None  # 控制支持模型的输出详细程度
+    response_include: tuple[str, ...] | None = None  # 指定 Responses API 额外返回的 output 数据
 
     def resolve(self, override: ModelSettings | None) -> ModelSettings:
         if override is None:

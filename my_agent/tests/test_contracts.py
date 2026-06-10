@@ -89,6 +89,9 @@ class ContractsTestCase(unittest.TestCase):
         self.assertEqual(model_response.response_id, "resp_1")
         self.assertEqual(model_response.tool_calls, [tool_call])
         self.assertIs(model_response.raw, raw_response)
+        self.assertIsNone(model_response.usage)
+        self.assertIsNone(model_response.request_summary)
+        self.assertIsNone(model_response.request_id)
 
     def test_run_item_records_one_agent_event(self) -> None:
         tool_call = ToolCall("echo_text", {"text": "hello"}, "call_1")

@@ -15,6 +15,11 @@ if str(SRC_DIR) not in sys.path:
 
 import agents  # noqa: E402
 from agents.run_loop import _run_agent_loop_impl, run_agent_loop  # noqa: E402
+from agents.turn_resolution import (  # noqa: E402
+    NextStepFinalOutput as TurnResolutionNextStepFinalOutput,
+    ProcessedResponse as TurnResolutionProcessedResponse,
+    SingleStepResult as TurnResolutionSingleStepResult,
+)
 
 
 class PublicApiTestCase(unittest.TestCase):
@@ -152,6 +157,9 @@ class PublicApiTestCase(unittest.TestCase):
         }
 
         self.assertTrue(expected_run_step_api.issubset(set(agents.__all__)))
+        self.assertIs(agents.ProcessedResponse, TurnResolutionProcessedResponse)
+        self.assertIs(agents.SingleStepResult, TurnResolutionSingleStepResult)
+        self.assertIs(agents.NextStepFinalOutput, TurnResolutionNextStepFinalOutput)
         self.assertEqual(agents.NextStepRunAgain().reason, "tool_results")
         self.assertEqual(
             agents.MODEL_RETURNED_NO_TOOL_CALL,
@@ -193,6 +201,14 @@ class PublicApiTestCase(unittest.TestCase):
         self.assertEqual(request.call_id, "call_1")
         self.assertEqual(limits.timeout_seconds, 1.0)
         self.assertEqual(report.to_metadata()["reason"], "tool_approval_required")
+
+    def test_package_root_imports_planner_api_from_split_module(self) -> None:
+        package_source = Path(agents.__file__).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "from .tool_planning import ToolExecutionPlan, build_tool_execution_plan",
+            package_source,
+        )
 
     def test_edit_tool_api_is_public_from_package_root(self) -> None:
         self.assertIn("create_apply_patch_tool", agents.__all__)

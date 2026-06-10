@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 from .contracts import ChatMessage, ModelResponse, RunItem, ToolApprovalRequest, ToolCall
@@ -23,6 +23,14 @@ class VerificationSummary:
     passed: bool
     skipped: int = 0
     last_observation: str | None = None
+
+
+@dataclass(frozen=True)
+class PendingApprovalSummary:
+    tool_name: str
+    call_id: str
+    arguments: dict[str, Any]
+    reason: str | None = None
 
 
 def _run_item_observation(item: RunItem) -> str | None:
@@ -73,6 +81,57 @@ def _verification_summary_from_items(
     )
 
 
+def _tool_call_to_state(tool_call: ToolCall) -> dict[str, Any]:
+    return {
+        "tool_name": tool_call.tool_name,
+        "arguments": dict(tool_call.arguments),
+        "call_id": tool_call.call_id,
+    }
+
+
+def _tool_approval_request_to_state(request: ToolApprovalRequest) -> dict[str, Any]:
+    return {
+        "tool_name": request.tool_name,
+        "call_id": request.call_id,
+        "arguments": dict(request.arguments),
+        "reason": request.reason,
+    }
+
+
+def _model_response_to_state(response: ModelResponse) -> dict[str, Any]:
+    return {
+        "response_id": response.response_id,
+        "output": response.output,
+        "output_text": response.output_text,
+        "tool_calls": [_tool_call_to_state(tool_call) for tool_call in response.tool_calls],
+        "refusal": response.refusal,
+        "usage": response.usage,
+        "request_summary": response.request_summary,
+        "request_id": response.request_id,
+    }
+
+
+def _run_item_payload_to_state(payload: Any) -> Any:
+    if isinstance(payload, ToolCall):
+        return _tool_call_to_state(payload)
+    if isinstance(payload, ToolApprovalRequest):
+        return _tool_approval_request_to_state(payload)
+    if isinstance(payload, ModelResponse):
+        return _model_response_to_state(payload)
+    if isinstance(payload, VerificationSummary):
+        return asdict(payload)
+    return payload
+
+
+def _run_item_to_state(item: RunItem) -> dict[str, Any]:
+    return {
+        "item_type": item.item_type,
+        "step_number": item.step_number,
+        "payload": _run_item_payload_to_state(item.payload),
+        "metadata": dict(item.metadata),
+    }
+
+
 if TYPE_CHECKING:
     from .agent import Agent
     from .guardrails import InputGuardrailResult, OutputGuardrailResult
@@ -117,6 +176,18 @@ class RunResultBase:
             for item in self.new_items
             if item.item_type == "tool_approval_required"
             and isinstance(item.payload, ToolApprovalRequest)
+        )
+
+    @property
+    def pending_approval_summaries(self) -> tuple[PendingApprovalSummary, ...]:
+        return tuple(
+            PendingApprovalSummary(
+                tool_name=request.tool_name,
+                call_id=request.call_id,
+                arguments=dict(request.arguments),
+                reason=request.reason,
+            )
+            for request in self.pending_approvals
         )
 
     @property
@@ -166,15 +237,28 @@ class RunResultBase:
         return messages
 
     def to_state(self) -> dict[str, Any]:
-        return {
-            "input": self.input,
-            "last_agent": self.last_agent,
-            "last_response_id": self.last_response_id,
-            "final_output": self.final_output,
-            "reached_final_answer": self.reached_final_answer,
-            "verification_summary": self.verification_summary,
-            "new_items": self.new_items,
-        }
+        from .run_state import RunStateSnapshot
+
+        approvals = (
+            self.context_wrapper.export_tool_approvals(self.pending_approvals)
+            if self.context_wrapper is not None
+            else ()
+        )
+        snapshot = RunStateSnapshot(
+            input=self.input,
+            last_agent_name=getattr(self.last_agent, "name", None),
+            last_response_id=self.last_response_id,
+            current_turn=self.current_turn,
+            steps_taken=self.steps_taken,
+            max_turns=self.max_turns,
+            max_steps=self.max_steps,
+            tool_approvals=approvals,
+            model_responses=tuple(
+                _model_response_to_state(response) for response in self.raw_responses
+            ),
+            new_items=tuple(_run_item_to_state(item) for item in self.new_items),
+        )
+        return asdict(snapshot)
 
 
 @dataclass(frozen=True)

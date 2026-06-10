@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 
 from agents.run_context import RunContextWrapper
+from agents.environment import LocalEnvironment
+from agents.verification import VerificationRunner
 from agents.workspace import Workspace, WorkspacePathError
 
 
@@ -62,3 +64,20 @@ def test_run_context_wrapper_workspace_is_none_when_missing() -> None:
     context = RunContextWrapper(context={"request_id": "run_123"})
 
     assert context.workspace is None
+
+
+def test_run_context_wrapper_exposes_environment_from_context(tmp_path: Path) -> None:
+    workspace = Workspace(root=tmp_path)
+    environment = LocalEnvironment(workspace=workspace)
+    context = RunContextWrapper(context={"environment": environment})
+
+    assert context.environment is environment
+
+
+def test_run_context_wrapper_exposes_verification_runner_from_context(tmp_path: Path) -> None:
+    workspace = Workspace(root=tmp_path)
+    environment = LocalEnvironment(workspace=workspace)
+    verification_runner = VerificationRunner(environment)
+    context = RunContextWrapper(context={"verification_runner": verification_runner})
+
+    assert context.verification_runner is verification_runner

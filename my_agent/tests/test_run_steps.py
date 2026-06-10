@@ -12,9 +12,11 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import agents.run_steps as run_steps  # noqa: E402
+import agents.model_turn as model_turn_module  # noqa: E402
 from agents import (  # noqa: E402
     Agent,
     AgentMemory,
+    ChatMessage,
     CodeExecutionResult,
     FunctionTool,
     ModelCallError,
@@ -26,6 +28,20 @@ from agents import (  # noqa: E402
     ToolCall,
     ToolRegistry,
     ToolSpec,
+)
+from agents.model_turn import (  # noqa: E402
+    ModelTurnResult as ModelTurnModuleResult,
+    TurnInput as ModelTurnModuleInput,
+    prepare_turn_input as model_turn_prepare_turn_input,
+    run_model_turn as model_turn_run_model_turn,
+)
+from agents.run_recording import (  # noqa: E402
+    record_final_output as run_recording_record_final_output,
+    record_model_error as run_recording_record_model_error,
+    record_model_text_final_output as run_recording_record_model_text_final_output,
+    record_run_stopped as run_recording_record_run_stopped,
+    record_tool_call as run_recording_record_tool_call,
+    run_verification_after_tool as run_recording_run_verification_after_tool,
 )
 from agents.run_steps import (  # noqa: E402
     HandoffOutcome,
@@ -43,7 +59,9 @@ from agents.run_steps import (  # noqa: E402
     interpret_tool_result,
     prepare_turn_input,
     process_model_turn,
+    record_final_output,
     record_model_error,
+    record_model_text_final_output,
     record_run_stopped,
     record_tool_call,
     record_tool_output,
@@ -55,6 +73,33 @@ from agents.run_steps import (  # noqa: E402
     resolve_tool_final_output_step,
     resolve_tool_run_again_step,
     run_model_turn,
+    run_verification_after_tool,
+)
+from agents.tool_execution import (  # noqa: E402
+    ToolExecutionOutcome as ToolModuleExecutionOutcome,
+    ToolResultInfo as ToolModuleResultInfo,
+    execute_tool_call as tool_module_execute_tool_call,
+    interpret_tool_result as tool_module_interpret_tool_result,
+    record_tool_error as tool_module_record_tool_error,
+    record_tool_output as tool_module_record_tool_output,
+)
+from agents.turn_resolution import (  # noqa: E402
+    MODEL_RETURNED_NO_TOOL_CALL as TurnResolutionModelReturnedNoToolCall,
+    NextStepFinalOutput as TurnResolutionNextStepFinalOutput,
+    NextStepHandoff as TurnResolutionNextStepHandoff,
+    NextStepPendingApproval as TurnResolutionNextStepPendingApproval,
+    NextStepRunAgain as TurnResolutionNextStepRunAgain,
+    NextStepStopped as TurnResolutionNextStepStopped,
+    ProcessedResponse as TurnResolutionProcessedResponse,
+    SingleStepResult as TurnResolutionSingleStepResult,
+    process_model_turn as turn_resolution_process_model_turn,
+    resolve_final_output_step as turn_resolution_resolve_final_output_step,
+    resolve_handoff_step as turn_resolution_resolve_handoff_step,
+    resolve_model_response_step as turn_resolution_resolve_model_response_step,
+    resolve_no_tool_call_step as turn_resolution_resolve_no_tool_call_step,
+    resolve_pending_approval_step as turn_resolution_resolve_pending_approval_step,
+    resolve_tool_final_output_step as turn_resolution_resolve_tool_final_output_step,
+    resolve_tool_run_again_step as turn_resolution_resolve_tool_run_again_step,
 )
 
 
@@ -112,6 +157,72 @@ def echo_tool() -> FunctionTool:
 
 
 class RunStepsTestCase(unittest.TestCase):
+    def test_tool_execution_api_is_available_from_tool_execution_module(self) -> None:
+        tool_execution_source = Path(
+            tool_module_execute_tool_call.__code__.co_filename
+        ).read_text(encoding="utf-8")
+
+        self.assertIs(ToolModuleExecutionOutcome, ToolExecutionOutcome)
+        self.assertIs(tool_module_execute_tool_call, execute_tool_call)
+        self.assertIs(ToolModuleResultInfo, run_steps.ToolResultInfo)
+        self.assertIs(tool_module_interpret_tool_result, interpret_tool_result)
+        self.assertIs(tool_module_record_tool_output, record_tool_output)
+        self.assertIs(tool_module_record_tool_error, record_tool_error)
+        self.assertNotIn(
+            "from .run_steps import _execute_tool_call_impl",
+            tool_execution_source,
+        )
+
+    def test_turn_resolution_api_is_available_from_turn_resolution_module(self) -> None:
+        self.assertIs(TurnResolutionProcessedResponse, ProcessedResponse)
+        self.assertIs(TurnResolutionSingleStepResult, SingleStepResult)
+        self.assertIs(TurnResolutionNextStepFinalOutput, NextStepFinalOutput)
+        self.assertIs(TurnResolutionNextStepRunAgain, NextStepRunAgain)
+        self.assertIs(TurnResolutionNextStepHandoff, NextStepHandoff)
+        self.assertIs(TurnResolutionNextStepPendingApproval, run_steps.NextStepPendingApproval)
+        self.assertIs(TurnResolutionNextStepStopped, NextStepStopped)
+        self.assertEqual(
+            TurnResolutionModelReturnedNoToolCall,
+            run_steps.MODEL_RETURNED_NO_TOOL_CALL,
+        )
+        self.assertIs(turn_resolution_process_model_turn, process_model_turn)
+        self.assertIs(turn_resolution_resolve_final_output_step, resolve_final_output_step)
+        self.assertIs(turn_resolution_resolve_handoff_step, resolve_handoff_step)
+        self.assertIs(
+            turn_resolution_resolve_model_response_step,
+            resolve_model_response_step,
+        )
+        self.assertIs(turn_resolution_resolve_no_tool_call_step, resolve_no_tool_call_step)
+        self.assertIs(
+            turn_resolution_resolve_pending_approval_step,
+            run_steps.resolve_pending_approval_step,
+        )
+        self.assertIs(
+            turn_resolution_resolve_tool_final_output_step,
+            resolve_tool_final_output_step,
+        )
+        self.assertIs(turn_resolution_resolve_tool_run_again_step, resolve_tool_run_again_step)
+
+    def test_model_turn_api_is_available_from_model_turn_module(self) -> None:
+        self.assertIs(ModelTurnModuleInput, run_steps.TurnInput)
+        self.assertIs(ModelTurnModuleResult, ModelTurnResult)
+        self.assertIs(model_turn_prepare_turn_input, prepare_turn_input)
+        self.assertIs(model_turn_run_model_turn, run_model_turn)
+
+    def test_run_recording_api_is_available_from_run_recording_module(self) -> None:
+        self.assertIs(run_recording_record_model_error, record_model_error)
+        self.assertIs(run_recording_record_run_stopped, record_run_stopped)
+        self.assertIs(run_recording_record_tool_call, record_tool_call)
+        self.assertIs(run_recording_record_final_output, record_final_output)
+        self.assertIs(
+            run_recording_record_model_text_final_output,
+            record_model_text_final_output,
+        )
+        self.assertIs(
+            run_recording_run_verification_after_tool,
+            run_verification_after_tool,
+        )
+
     def test_step_and_plan_types_document_state_machine_contracts(self) -> None:
         docs = "\n".join(
             cls.__doc__ or ""
@@ -497,6 +608,45 @@ class RunStepsTestCase(unittest.TestCase):
         self.assertEqual(turn_input.messages[1].role, "user")
         self.assertEqual(turn_input.messages[1].content, "Echo hello.")
         self.assertIn("echo_text", [spec.name for spec in turn_input.tool_specs])
+
+    def test_prepare_turn_input_uses_context_builder_for_messages(self) -> None:
+        builder_messages = [ChatMessage(role="user", content="from builder")]
+        calls = []
+
+        class FakeContextBundle:
+            def to_messages(self):
+                return builder_messages
+
+        def fake_build_turn_context(agent_arg):
+            calls.append(agent_arg)
+            return FakeContextBundle()
+
+        original_builder = getattr(model_turn_module, "build_turn_context", None)
+        model_turn_module.build_turn_context = fake_build_turn_context
+        try:
+            agent = Agent(
+                memory=AgentMemory(),
+                model=ResponseModel(
+                    ModelResponse(
+                        response_id=None,
+                        output=[],
+                        output_text=None,
+                        tool_calls=[],
+                    )
+                ),
+                instructions="ignored by patched builder",
+            )
+            agent.memory.add_task("from memory")
+
+            turn_input = model_turn_module.prepare_turn_input(agent)
+        finally:
+            if original_builder is None:
+                delattr(model_turn_module, "build_turn_context")
+            else:
+                model_turn_module.build_turn_context = original_builder
+
+        self.assertEqual(calls, [agent])
+        self.assertIs(turn_input.messages, builder_messages)
 
     def test_run_model_turn_records_model_response_and_returns_tool_calls(self) -> None:
         model_response = ModelResponse(

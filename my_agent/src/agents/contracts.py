@@ -63,6 +63,9 @@ class ModelResponse:
     tool_calls: list[ToolCall]
     refusal: str | None = None
     raw: Any | None = None
+    usage: dict[str, Any] | None = None
+    request_summary: dict[str, Any] | None = None
+    request_id: str | None = None
 
 
 # 存“某个工具输入 Guardrail 已运行”的事件 
