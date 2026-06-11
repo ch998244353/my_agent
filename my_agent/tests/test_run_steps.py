@@ -610,6 +610,8 @@ class RunStepsTestCase(unittest.TestCase):
         self.assertIn("echo_text", [spec.name for spec in turn_input.tool_specs])
 
     def test_prepare_turn_input_uses_context_builder_for_messages(self) -> None:
+        from agents.run_context import RunContextWrapper
+
         builder_messages = [ChatMessage(role="user", content="from builder")]
         calls = []
 
@@ -617,8 +619,8 @@ class RunStepsTestCase(unittest.TestCase):
             def to_messages(self):
                 return builder_messages
 
-        def fake_build_turn_context(agent_arg):
-            calls.append(agent_arg)
+        def fake_build_turn_context(agent_arg, context_wrapper=None):
+            calls.append((agent_arg, context_wrapper))
             return FakeContextBundle()
 
         original_builder = getattr(model_turn_module, "build_turn_context", None)
@@ -637,15 +639,19 @@ class RunStepsTestCase(unittest.TestCase):
                 instructions="ignored by patched builder",
             )
             agent.memory.add_task("from memory")
+            context_wrapper = RunContextWrapper()
 
-            turn_input = model_turn_module.prepare_turn_input(agent)
+            turn_input = model_turn_module.prepare_turn_input(
+                agent,
+                context_wrapper=context_wrapper,
+            )
         finally:
             if original_builder is None:
                 delattr(model_turn_module, "build_turn_context")
             else:
                 model_turn_module.build_turn_context = original_builder
 
-        self.assertEqual(calls, [agent])
+        self.assertEqual(calls, [(agent, context_wrapper)])
         self.assertIs(turn_input.messages, builder_messages)
 
     def test_run_model_turn_records_model_response_and_returns_tool_calls(self) -> None:

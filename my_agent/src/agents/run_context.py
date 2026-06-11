@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar
 if TYPE_CHECKING:
     from .contracts import ToolApprovalRequest
     from .environment import Environment
+    from .repo_context import RepoContext
     from .run_state import ApprovalSnapshot
+    from .selected_files import SelectedFilesState
     from .verification import VerificationRunner
     from .workspace import Workspace
 
@@ -17,6 +19,8 @@ ContextValueT = TypeVar("ContextValueT")
 CONTEXT_WORKSPACE_KEY = "workspace"
 CONTEXT_ENVIRONMENT_KEY = "environment"
 CONTEXT_VERIFICATION_RUNNER_KEY = "verification_runner"
+CONTEXT_SELECTED_FILES_KEY = "selected_files"
+CONTEXT_REPO_CONTEXT_KEY = "repo_context"
 
 
 @dataclass
@@ -80,6 +84,18 @@ class RunContextWrapper:
             CONTEXT_VERIFICATION_RUNNER_KEY,
             VerificationRunner,
         )
+
+    @property
+    def selected_files(self) -> SelectedFilesState | None:
+        from .selected_files import SelectedFilesState
+
+        return self._context_value(CONTEXT_SELECTED_FILES_KEY, SelectedFilesState)
+
+    @property
+    def repo_context(self) -> RepoContext | None:
+        from .repo_context import RepoContext
+
+        return self._context_value(CONTEXT_REPO_CONTEXT_KEY, RepoContext)
 
     @staticmethod
     def _approval_key(tool_name: str, call_id: str) -> tuple[str, str]:

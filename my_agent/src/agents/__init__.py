@@ -17,6 +17,12 @@ from .chat_runtime import (
     build_chat_session,
 )
 from .coding_agent import CodingAgentProfile, CodingAgentSetup, build_coding_agent
+from .context_mentions import (
+    MentionCandidate,
+    MentionKind,
+    detect_file_mentions,
+    resolve_mentions_against_inventory,
+)
 from .contracts import (
     AgentRunResult,
     ChatMessage,
@@ -76,10 +82,17 @@ from .python_executor import (
     MiniPythonExecutor,
     create_python_executor_tool,
 )
+from .repo_context import build_task_repo_context
 from .result import RunResult, RunResultBase
 from .runner import Runner
 from .run_config import RunConfig
 from .run_context import RunContextWrapper
+from .selected_files import (
+    SelectedFile,
+    SelectedFileMode,
+    SelectedFilesState,
+    add_task_mentions_to_selected_files,
+)
 from .run_loop import resume_agent_loop
 from .run_resume import ResumeToolApprovalResult, resume_pending_tool_approvals
 from .run_state import ApprovalSnapshot, RunState, RunStateSnapshot
@@ -173,6 +186,11 @@ from .tools import (
 )
 from .verification import VerificationPolicy, VerificationResult, VerificationRunner
 from .workspace import Workspace, WorkspacePathError
+from .workspace_inventory import (
+    WorkspaceFileEntry,
+    WorkspaceInventory,
+    build_workspace_inventory,
+)
 from .workspace_tools import (
     create_list_workspace_files_tool,
     create_read_workspace_file_tool,
@@ -223,6 +241,8 @@ __all__ = [
     "MemoryCompressor",
     "MemorySummarizer",
     "MemorySummary",
+    "MentionCandidate",
+    "MentionKind",
     "ModelAdapter",
     "ModelCallError",
     "ModelResponseError",
@@ -252,6 +272,9 @@ __all__ = [
     "RunState",
     "RunStateSnapshot",
     "RuleBasedSummarizer",
+    "SelectedFile",
+    "SelectedFileMode",
+    "SelectedFilesState",
     "Span",
     "SpanData",
     "SpanError",
@@ -289,6 +312,8 @@ __all__ = [
     "VerificationResult",
     "VerificationRunner",
     "Workspace",
+    "WorkspaceFileEntry",
+    "WorkspaceInventory",
     "WorkspacePathError",
     "BatchTraceProcessor",
     "DebugTracingProcessor",
@@ -300,11 +325,14 @@ __all__ = [
     "SynchronousMultiTracingProcessor",
     "SingleStepResult",
     "add_trace_processor",
+    "add_task_mentions_to_selected_files",
     "agent_span",
     "build_chat_agent",
     "build_chat_runtime",
     "build_chat_session",
     "build_coding_agent",
+    "build_task_repo_context",
+    "build_workspace_inventory",
     "build_tool_execution_plan",
     "clip_tool_text",
     "create_agent_tool",
@@ -317,6 +345,7 @@ __all__ = [
     "create_search_workspace_text_tool",
     "create_shell_command_tool",
     "create_test_command_tool",
+    "detect_file_mentions",
     "custom_span",
     "function_span",
     "function_tool",
@@ -353,6 +382,7 @@ __all__ = [
     "run_chat_turn",
     "resume_agent_loop",
     "resume_pending_tool_approvals",
+    "resolve_mentions_against_inventory",
     "tool_to_prompt_text",
     "ResumeToolApprovalResult",
 ]

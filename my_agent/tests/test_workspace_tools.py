@@ -48,6 +48,22 @@ def test_list_workspace_files_skips_ignored_entries(tmp_path: Path) -> None:
     assert result["entries"] == ["src"]
 
 
+def test_list_workspace_files_includes_inventory_metadata(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "src").mkdir()
+
+    tool = create_list_workspace_files_tool(Workspace(root=tmp_path))
+    result = tool.execute({"path": ".", "max_entries": 10})
+
+    assert result["entries"] == ["src"]
+    inventory = result["inventory"]
+    assert inventory["base_path"] == "."
+    assert inventory["entries"][0]["path"] == ".git"
+    assert inventory["entries"][0]["readable"] is False
+    assert inventory["entries"][0]["ignored"] is True
+    assert inventory["entries"][0]["reason"] == "ignored_by_workspace_policy"
+
+
 def test_list_workspace_files_limits_entries(tmp_path: Path) -> None:
     for name in ("a.py", "b.py", "c.py"):
         (tmp_path / name).write_text("", encoding="utf-8")
@@ -145,6 +161,11 @@ def test_create_readonly_workspace_tools_returns_all_readonly_tools(tmp_path: Pa
         "list_workspace_files",
         "read_workspace_file",
         "search_workspace_text",
+        "read_workspace_lines",
+        "search_workspace_code",
+        "find_workspace_files",
+        "outline_workspace_file",
+        "find_related_workspace_files",
     ]
 
 
@@ -157,6 +178,11 @@ def test_readonly_workspace_tools_can_register_to_tool_registry(tmp_path: Path) 
     assert registry.get("list_workspace_files").name == "list_workspace_files"
     assert registry.get("read_workspace_file").name == "read_workspace_file"
     assert registry.get("search_workspace_text").name == "search_workspace_text"
+    assert registry.get("read_workspace_lines").name == "read_workspace_lines"
+    assert registry.get("search_workspace_code").name == "search_workspace_code"
+    assert registry.get("find_workspace_files").name == "find_workspace_files"
+    assert registry.get("outline_workspace_file").name == "outline_workspace_file"
+    assert registry.get("find_related_workspace_files").name == "find_related_workspace_files"
 
 
 def test_readonly_workspace_tools_are_exported_from_package(tmp_path: Path) -> None:
@@ -166,6 +192,11 @@ def test_readonly_workspace_tools_are_exported_from_package(tmp_path: Path) -> N
         "list_workspace_files",
         "read_workspace_file",
         "search_workspace_text",
+        "read_workspace_lines",
+        "search_workspace_code",
+        "find_workspace_files",
+        "outline_workspace_file",
+        "find_related_workspace_files",
     ]
 
 

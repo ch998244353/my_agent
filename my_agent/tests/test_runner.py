@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from agents import (  # noqa: E402
     Agent,
     AgentMemory,
     AgentSession,
+    CodingAgentProfile,
     FunctionTool,
     GuardrailFunctionOutput,
     ModelResponse,
@@ -29,6 +31,7 @@ from agents import (  # noqa: E402
     output_guardrail,
     tool_input_guardrail,
 )
+from agents.coding_agent import build_coding_agent  # noqa: E402
 from agents.tracing import (  # noqa: E402
     BatchTraceProcessor,
     InMemoryTracingExporter,
@@ -119,6 +122,45 @@ class RunnerTestCase(unittest.TestCase):
         self.assertEqual(result.input, "Finish through Runner.")
         self.assertIs(result.last_agent, agent)
         self.assertEqual(model.last_messages[0].content, "Finish through Runner.")
+
+    def test_coding_agent_builds_repo_context_before_first_model_turn(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        workspace_path = Path(temp_dir.name)
+        (workspace_path / "src" / "agents").mkdir(parents=True)
+        (workspace_path / "src" / "agents" / "context_chunks.py").write_text(
+            "def build_turn_context():\n    return []\n",
+            encoding="utf-8",
+        )
+        model = ScriptedModel(
+            [
+                ToolCall(
+                    tool_name="final_answer",
+                    arguments={"answer": "done"},
+                    call_id="call_1",
+                )
+            ]
+        )
+        setup = build_coding_agent(
+            model=model,
+            workspace=workspace_path,
+            profile=CodingAgentProfile.read_only(),
+        )
+
+        Runner.run_sync(
+            setup.agent,
+            "修改 `src/agents/context_chunks.py` 并查看 build_turn_context",
+            config=setup.run_config,
+        )
+
+        rendered_messages = "\n\n".join(message.content for message in model.last_messages)
+        self.assertIn("Repo context:", rendered_messages)
+        self.assertIn("## Workspace inventory", rendered_messages)
+        self.assertIn("## Selected files", rendered_messages)
+        self.assertIn("src/agents/context_chunks.py", rendered_messages)
+        self.assertIn("Mentioned symbols: build_turn_context", rendered_messages)
+        self.assertIn("## Workspace code matches", rendered_messages)
+        self.assertIn("build_turn_context: src/agents/context_chunks.py:1", rendered_messages)
 
     def test_runner_run_sync_uses_runtime_loop_not_agent_private_run(self) -> None:
         model = ScriptedModel(

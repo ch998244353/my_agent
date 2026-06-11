@@ -1,191 +1,206 @@
-# PLAN01 - Workspace Inventory 教学计划
+# PLAN05 - Repo Context Chunk Integration 教学计划
 
-本计划属于“仓库理解与上下文选择能力”阶段的第一步。新 Agent 接手时要先理解这一点：这个模块不是为了让 `my_agent` 立刻更聪明地改代码，而是先建立一个可靠的仓库观察层。后续的文件提及识别、selected files、CodeGraph 检索、repo context 都依赖它。
+本计划是“仓库理解与上下文选择能力”的最后一步。前四个计划分别建立了 workspace inventory、mention detection、selected files state 和 workspace code reading/search tools。PLAN05 要把它们串起来，生成真正能进入模型输入的 `repo_context`。
 
-当前 `my_agent` 已经有 `Workspace` 和 `workspace_tools`。`Workspace` 负责 root、allowed paths、ignore patterns 和安全路径解析；`workspace_tools.py` 里已经有 `list_workspace_files`、`read_workspace_file`、`search_workspace_text`。问题是这些能力还停留在“工具 handler 内部逻辑”的层面，不能作为 prompt context builder、文件选择状态、仓库摘要的共同基础。因此本模块要把“列出 workspace 结构”抽成可复用的 inventory 模块。
+这个模块的目标不是让 Agent 自动改代码，而是让模型在思考前获得一段稳定、可审计、可裁剪的仓库上下文。它是后续安全编辑、验证闭环、CLI Coding Agent 的基础。
 
 ## 给新 Agent 的快速导航
 
 先读这些 my_agent 文件：
 
-- `my_agent/src/agents/workspace.py`
-- `my_agent/src/agents/workspace_tools.py`
 - `my_agent/src/agents/context_chunks.py`
-- `my_agent/tests/test_workspace.py`
-- `my_agent/tests/test_workspace_tools.py`
+- `my_agent/src/agents/model_turn.py`
+- `my_agent/src/agents/run_context.py`
+- `my_agent/src/agents/workspace_inventory.py`
+- `my_agent/src/agents/context_mentions.py`
+- `my_agent/src/agents/selected_files.py`
+- `my_agent/src/agents/workspace_code.py`
+- `my_agent/src/agents/workspace_code_tools.py`
 
-再读这些参考项目文件：
+再读这些参考文件：
 
-- `reference/aider-main/aider/repo.py`
+- `reference/aider-main/aider/repomap.py`
+- `reference/aider-main/aider/coders/chat_chunks.py`
 - `reference/aider-main/aider/coders/base_coder.py`
-- `reference/OpenHands-main/openhands/app_server/app_conversation/app_conversation_service_base.py`
 
-Aider 的价值在于它不会把整个仓库都塞进 prompt，而是先知道哪些文件存在、哪些文件被用户加入上下文、哪些文件只读。OpenHands 的价值在于它把 workspace 准备状态显式化。`my_agent` 目前缺的是这层中间结构。
+Aider 的 repo map 是大仓库上下文压缩的核心参考。但 `my_agent` 不应该在这个阶段复制完整 PageRank/tree-sitter 体系。这里先做轻量 repo context builder，把已有线索组织好。
 
-参考项目只借鉴边界和数据流思想，不复制完整实现。Aider 的文件集合、只读文件和 repo map 说明“仓库清单”和“上下文预算”应该分层；OpenHands 的 workspace 准备流程说明“工作区状态”应该显式表达。PLAN01 只实现轻量 inventory，不引入 Git tracked files、token budget、setup script 或会话状态机。
+当前代码中 PLAN04 的实际落地文件不是 `code_index.py`，而是 `workspace_code.py` 和 `workspace_code_tools.py`。因此本计划后续提到 workspace code search/read/outline 时，应以 `WorkspaceCodeReader` 及其工具结果为准，不再假设存在 `CodeIndexProvider` 或 `search_symbols()` 接口。
 
 ## 模块目标
 
-完成后，`my_agent` 应该能生成一个结构化的 workspace 清单。这个清单必须说明：
+完成后，`my_agent` 应该能构建 `RepoContext`。它应该综合以下来源：
 
-- workspace root 是什么。
-- 从哪个 path 开始扫描。
-- 每个条目是文件还是目录。
-- 每个条目的相对路径是什么。
-- 文件大小是多少。
-- 条目是否 readable。
-- 条目是否因为 ignore 或 allowed paths 被排除。
-- 输出是否因为 `max_entries` 或 `max_depth` 被截断。
+- PLAN01 的 workspace inventory。
+- PLAN02 的 mention candidates。
+- PLAN03 的 selected files state。
+- PLAN04 的 workspace code search/read/outline 结果。
 
-这个模块不应该读取文件内容，不应该做符号索引，不应该做文件自动选择，也不应该做 Git diff。它只解决“仓库里有什么，以及这些路径是否安全可见”。
-
-结构化输出契约要从课程 1 开始固定：`WorkspaceFileEntry.to_dict()` 返回 `path`、`kind`、`size_bytes`、`readable`、`ignored`、`reason`；`WorkspaceInventory.to_dict()` 返回 `root`、`base_path`、`entries`、`truncated`。后续课程可以补充扫描来源和截断逻辑，但不要改变这些字段语义。
+`RepoContext` 最终要作为 `repo_context` chunk 进入 `prepare_turn_input()` 生成的 messages。它必须稳定、有边界、可测试。
 
 ## 当前旧代码缺陷
 
-`Workspace` 当前职责很清楚，但它是路径安全边界，不是仓库清单模型。`workspace_tools.py` 当前可以列文件，但输出逻辑直接写在工具函数里。这样会导致后续模块重复实现文件扫描逻辑：selected files 要扫一次，repo context 要扫一次，CLI `/files` 又要扫一次。
+`context_chunks.py` 已经预留 `CONTEXT_CHUNK_REPO_CONTEXT`，但目前没有任何真实内容来源。`build_turn_context(agent)` 当前主要处理 system instructions、memory summary 和 memory messages。没有 repo context 时，模型依然只能靠 memory 和工具临时探索仓库。
 
-本计划要补足的不是一个新工具，而是一层可复用的 workspace inventory API。工具层只应该调用它。
+本计划要补足的是“把仓库理解结果放到模型输入层”的最后一段链路。
 
 ## 计划新增的 my_agent 内容
 
-创建 `my_agent/src/agents/workspace_inventory.py`，放置以下内容：
+创建 `my_agent/src/agents/repo_context.py`：
 
-- `WorkspaceFileEntry`：表示一个文件或目录条目。
-- `WorkspaceInventory`：表示一次扫描结果。
-- `build_workspace_inventory()`：从 `Workspace` 安全扫描文件树。
-- 私有辅助函数：负责排序、截断、相对路径渲染、ignore reason 生成。
+- `RepoContextSection`
+- `RepoContext`
+- `RepoContextBuilder`
+- `build_repo_context()`
+- 文本渲染和截断 helper
 
-修改 `my_agent/src/agents/workspace_tools.py`：
+修改 `my_agent/src/agents/run_context.py`：
 
-- 让 `create_list_workspace_files_tool()` 调用 `build_workspace_inventory()`。
-- 保持原有工具输出兼容，但可以增加 `truncated`、`root`、`entries` 等结构化信息。
+- 增加 `CONTEXT_REPO_CONTEXT_KEY = "repo_context"`。
+- 增加 `repo_context` property。
 
-按需要修改 `my_agent/src/agents/__init__.py`：
+修改 `my_agent/src/agents/context_chunks.py`：
 
-- 如果后续教学需要公开类型，则导出 `WorkspaceInventory` 和 `WorkspaceFileEntry`。
-- 如果不希望扩大 public API，可以只在模块内部使用。
+- 增加 repo context chunk 渲染。
+- 确保 chunk 顺序稳定。
+
+必要时修改 `my_agent/src/agents/model_turn.py`：
+
+- 如果 PLAN03 已经把 `build_turn_context()` 改为接受 `context_wrapper`，这里继续沿用。
 
 新增测试：
 
-- `my_agent/tests/test_workspace_inventory.py`
-- 修改 `my_agent/tests/test_workspace_tools.py`
+- `my_agent/tests/test_repo_context.py`
+- 修改 `my_agent/tests/test_context_chunks.py`
 
 ## 功能边界
 
 必须做：
 
-- 所有路径都通过 `Workspace.ensure_readable_path()` 或同等安全逻辑。
-- 入口 path 必须先通过 `Workspace.ensure_readable_path()`；候选条目如需保留 excluded reason，可以使用 `resolve_path()`、`is_allowed()`、`is_ignored()` 这类同等安全逻辑计算 metadata，但不能绕过 workspace root 检查。
-- 尊重 `allowed_paths`。
-- 尊重 `ignore_patterns`。
-- 输出顺序稳定，便于测试。
-- 支持 `max_entries` 和 `max_depth`。
-- 大目录要返回 `truncated=True`。
+- repo context 有结构化 section。
+- selected files 优先进入 repo context。
+- mention candidates 能进入 repo context。
+- fake workspace code search/read results 能进入 repo context。
+- 支持 `max_chars` 截断。
+- 去重重复路径和重复 section。
+- 渲染成稳定 prompt chunk。
 
 不能做：
 
-- 不读取文件内容。
-- 不做 token 预算。
-- 不调用 CodeGraph。
-- 不创建 selected files 状态。
-- 不把 inventory 直接注入 prompt。
+- 不自动编辑文件。
+- repo context 构建过程中不运行测试；课程实现完成后仍要按教学规则运行局部单测和相关回归测试。
+- 不调用真实 LLM。
+- 不做复杂 token 估算。
+- 不依赖外部代码索引服务。
+- 不把整个仓库文件内容塞进 prompt。
 
-## 课程 1：建立 inventory 数据模型
+## 课程 1：定义 RepoContext 数据结构
 
-优化目标：让 workspace 文件清单有独立、可测试、可序列化的数据结构。
+优化目标：让 repo context 有独立结构，而不是拼接字符串。
 
-执行标准：测试能构造 `WorkspaceFileEntry` 和 `WorkspaceInventory`，并能转成 dict 或 observation-friendly 结构。
+执行标准：测试能创建 section/context，并能渲染为文本。
 
-新增能力：`WorkspaceFileEntry` 至少包含 `path`、`kind`、`size_bytes`、`readable`、`ignored`、`reason`。`WorkspaceInventory` 至少包含 `root`、`base_path`、`entries`、`truncated`。
+新增能力：`RepoContextSection(title, content, source, priority)` 和 `RepoContext(sections, selected_paths, mentioned_symbols, truncated)`。
 
-大致修改方案：创建 `workspace_inventory.py`，使用 frozen dataclass。先不要写扫描逻辑，只写数据结构和序列化方法。新增代码控制在 60 到 80 行。
+功能边界：不执行真实搜索，不读取文件。
 
-参考代码：`my_agent/src/agents/contracts.py` 中 dataclass 的简单风格。
+大致修改方案：新建 `repo_context.py`，写 dataclass、排序和 `to_text()`。新增代码控制在 60 到 80 行。
 
-## 课程 2：实现安全扫描入口
+参考代码：Aider repo map 输出结构和 my_agent context chunk 风格。
 
-优化目标：提供 `build_workspace_inventory(workspace, path='.', max_entries=200, max_depth=None)`。
+## 课程 2：从 selected files 生成 context
 
-执行标准：给临时目录创建几个文件和目录，调用 builder 能返回稳定条目列表。
+优化目标：让 PLAN03 的 selected files 成为 repo context 的第一来源。
 
-新增能力：扫描目录，但所有入口 path 必须经过 `workspace.ensure_readable_path()`。
+执行标准：selected files 中的 read-only/editable 文件会生成一个 selected files section。
 
-功能边界：本课不处理 ignore reason 的精细解释，也不做复杂截断，只先得到安全扫描结果。
+新增能力：`RepoContextBuilder` 可以消费 `SelectedFilesState`。
 
-大致修改方案：使用 `Path.iterdir()` 读取目录，目录和文件都生成 `WorkspaceFileEntry`。排序按相对路径字符串。新增代码控制在 60 到 80 行。
+功能边界：只列路径和 mode，不读取文件内容。
 
-参考代码：`my_agent/src/agents/workspace_tools.py` 当前 list 工具。
+大致修改方案：实现 builder 的第一部分：读取 selected files，生成 section。新增代码控制在 60 到 80 行。
 
-## 课程 3：加入 allowed 和 ignore 原因
+参考代码：PLAN03。
 
-优化目标：让 inventory 不只是列出文件，还能说明文件为什么不可读或被跳过。
+## 课程 3：从 mentions 生成 context
 
-执行标准：被 `.git`、`.codegraph`、`__pycache__` 或自定义 ignore pattern 命中的路径不会被标记为 readable。
+优化目标：让用户任务中的路径、文件名、符号线索进入 repo context。
 
-新增能力：`reason` 字段能区分 `outside_allowed_paths`、`ignored_by_workspace_policy`、`ok` 等最小原因。
+执行标准：mention candidates 会生成 mentioned paths 和 mentioned symbols section。
 
-功能边界：不需要把每一种 ignore pattern 都展开成复杂解释，只要能让后续 Agent 知道“这个路径不应进入上下文”。
+新增能力：builder 消费 `MentionCandidate`。
 
-大致修改方案：对候选路径调用 `workspace.is_allowed()` 和 `workspace.is_ignored()`。如果路径不可读，可以保留条目但标记 readable false；也可以跳过不可读条目，但测试必须固定行为。推荐保留目录级不可读信息，文件级 ignored 可不展开递归。新增代码控制在 50 到 70 行。
+功能边界：不自动把 symbol mention 变成文件内容；符号查询放到下一课。
 
-实现细节补充：不要只用 `ensure_readable_path()` 一把跳过候选条目，否则无法给出 `outside_allowed_paths` 或 `ignored_by_workspace_policy` 的 reason。课程 3 应先确认候选路径仍在 workspace root 内，再用 `is_allowed()`、`is_ignored()` 标记 `readable`、`ignored` 和 `reason`；ignored 或不可读目录不要继续递归展开。
+大致修改方案：builder 接收 mentions，按 kind 分组，去重后生成 section。新增代码控制在 60 到 80 行。
 
-参考代码：`my_agent/src/agents/workspace.py`。
+参考代码：PLAN02。
 
-## 课程 4：加入 max_entries 和 max_depth
+## 课程 4：接入 workspace code search 查询结果
 
-优化目标：防止大型仓库扫描结果无限增长。
+优化目标：让符号和文本搜索结果能进入 repo context。
 
-执行标准：当条目超过 `max_entries` 时，inventory 标记 `truncated=True`，并且不会返回超过上限的 entries。设置 `max_depth=1` 时，不递归深层目录。
+执行标准：使用 fake provider 时，builder 能把 symbol/text matches 渲染成 section。
 
-新增能力：可控的 workspace 文件树输出。
+新增能力：builder 消费 PLAN04 的 `WorkspaceCodeReader` 或预先传入的 workspace code search/read/outline 结果。
 
-功能边界：这不是 token budget，只是扫描结果边界。真正的 prompt 字符预算放到 PLAN05。
+功能边界：不要在这里重新实现真实文件搜索或读取逻辑。PLAN04 已经通过 `WorkspaceCodeReader` 处理 `read_lines()`、`search_text()`、`find_files()`、`outline_file()` 和 `find_related_files()`。
 
-大致修改方案：扫描函数维护计数器和深度参数。达到上限后停止继续追加。新增代码控制在 50 到 70 行。
+大致修改方案：对 symbol mentions 先做保守处理，可用 `search_text()` 查文本命中；对 selected/mentioned paths 可调用 `outline_file()` 或消费已有 outline 结果；对路径和关键词可调用 `find_files()`/`search_text()`。限制每类结果数量。新增代码控制在 60 到 80 行。
 
-参考代码：Aider `repomap.py` 中控制 repo map 大小的设计思想。
+参考代码：PLAN04。
 
-## 课程 5：改造 list_workspace_files 工具
+## 课程 5：实现去重和截断
 
-优化目标：让现有 list 工具复用 inventory，而不是保留两套扫描逻辑。
+优化目标：repo context 不能无限膨胀。
 
-执行标准：原有 `test_workspace_tools.py` 继续通过，新增测试能看到 inventory 的 `truncated` 和 entry metadata。
+执行标准：重复路径只出现一次；超过 `max_chars` 时截断并标记 `truncated=True`。
 
-新增能力：工具输出和后续上下文构建共享同一个 inventory 结果。
+新增能力：section-level 去重和简单字符预算。
 
-功能边界：不修改 `read_workspace_file` 和 `search_workspace_text` 行为。
+功能边界：不做 tokenizer 级预算。
 
-大致修改方案：在 `create_list_workspace_files_tool()` 内调用 `build_workspace_inventory()`，把结果转换为当前工具期望的 dict 格式。新增代码控制在 40 到 60 行。
+大致修改方案：在 `RepoContext.to_text(max_chars=...)` 或 builder 里实现简单裁剪。优先保留 selected files，再保留 mentions，再保留 index results。新增代码控制在 50 到 70 行。
 
-兼容要求：旧工具输出中的 `path`、`entries`、`truncated` 必须保留原语义，`entries` 仍是相对路径字符串列表。新增的 inventory metadata 可以放在额外字段中，不能破坏现有调用方和旧测试。
+参考代码：Aider `max_map_tokens` 的优先级思想。
 
-参考代码：`my_agent/src/agents/workspace_tools.py`。
+## 课程 6：接入 RunContextWrapper
 
-## 课程 6：整理 public API 和测试边界
+优化目标：让 repo context 成为 run context 的一部分。
 
-优化目标：让后续计划可以稳定导入 inventory 类型。
+执行标准：`RunContextWrapper(context={...}).repo_context` 能返回 `RepoContext`。
 
-执行标准：如果选择导出，则 `from agents import WorkspaceInventory` 可用；如果不导出，则后续计划必须使用模块路径导入。
+新增能力：`CONTEXT_REPO_CONTEXT_KEY` 和 property。
 
-新增能力：明确 inventory 是内部能力还是公开教学 API。
+功能边界：不改 run loop。
 
-功能边界：不要一次性把太多内部 helper 暴露到 `__init__.py`。
+大致修改方案：修改 `run_context.py`，仿照 workspace 和 selected files property。新增代码控制在 60 到 80 行。
 
-大致修改方案：按测试需要最小修改 `__init__.py`，补充 `__all__`。新增代码控制在 40 到 60 行。
+参考代码：`my_agent/src/agents/run_context.py`。
 
-参考代码：`my_agent/src/agents/__init__.py`。
+## 课程 7：渲染 repo_context chunk
+
+优化目标：让模型输入真正包含 repo context。
+
+执行标准：调用 `prepare_turn_input()` 时，如果 context wrapper 中有 repo context，messages 里出现 `repo_context` 内容；没有 repo context 时不产生空消息。
+
+新增能力：repo context prompt 注入。
+
+功能边界：不要改变 memory 的原有语义，不要把 repo context 写入 long-term memory。
+
+大致修改方案：修改 `context_chunks.py`。如果 PLAN03 已将 `build_turn_context()` 改为接受 `context_wrapper`，就在其中读取 `context_wrapper.repo_context`。设置明确 priority，让 repo context 出现在 system instructions 之后、普通 memory 之前或 selected files 附近，具体顺序必须由测试固定。新增代码控制在 50 到 70 行。
+
+参考代码：`my_agent/src/agents/context_chunks.py` 和 Aider `ChatChunks`。
 
 ## 本模块完成标准
 
-本模块完成时，新 Agent 应该能运行单元测试证明以下事实：
+本模块完成时，新 Agent 应该能证明：
 
-1. Inventory 是独立模块，不依赖 tool handler。
-2. Inventory 永远受 `Workspace` 安全边界约束。
-3. Ignore 和 allowed paths 生效。
-4. 扫描输出稳定、可截断、可序列化。
-5. `list_workspace_files` 工具复用 inventory，不破坏旧行为。
+1. `RepoContext` 能独立构造、排序、渲染和截断。
+2. selected files、mentions、workspace code search/read results 都能成为 repo context section。
+3. repo context 不重复、不无限增长。
+4. repo context 存在于 `RunContextWrapper`。
+5. `prepare_turn_input()` 输出的 messages 包含稳定的 `repo_context` chunk。
+6. 没有 repo context 时，不产生空噪声消息。
 
-完成本模块后，下一步进入 PLAN02，用 inventory 结果去解析和匹配用户任务中的文件提及。
-
+完成 PLAN05 后，整个“仓库理解与上下文选择能力”阶段才算闭环。接下来可以进入安全编辑与验证闭环阶段。

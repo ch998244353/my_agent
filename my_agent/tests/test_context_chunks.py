@@ -189,6 +189,135 @@ class ContextChunksTestCase(unittest.TestCase):
         self.assertNotIn(CONTEXT_CHUNK_VERIFICATION_SUMMARY, [chunk.name for chunk in bundle.chunks])
         self.assertTrue(all(message.content.strip() for message in bundle.to_messages()))
 
+    def test_build_turn_context_skips_empty_selected_files_state(self) -> None:
+        _, build_turn_context, _ = self._load_context_api()
+        from agents import Agent, AgentMemory
+        from agents.context_chunks import CONTEXT_CHUNK_SELECTED_FILES
+        from agents.run_context import CONTEXT_SELECTED_FILES_KEY, RunContextWrapper
+        from agents.selected_files import SelectedFilesState
+
+        class RecordingModel:
+            pass
+
+        agent = Agent(memory=AgentMemory(), model=RecordingModel())
+        context_wrapper = RunContextWrapper(
+            context={CONTEXT_SELECTED_FILES_KEY: SelectedFilesState()}
+        )
+
+        bundle = build_turn_context(agent, context_wrapper=context_wrapper)
+
+        self.assertNotIn(CONTEXT_CHUNK_SELECTED_FILES, [chunk.name for chunk in bundle.chunks])
+        self.assertTrue(all(message.content.strip() for message in bundle.to_messages()))
+
+    def test_build_turn_context_renders_selected_files_state(self) -> None:
+        _, build_turn_context, _ = self._load_context_api()
+        from agents import Agent, AgentMemory
+        from agents.context_chunks import CONTEXT_CHUNK_SELECTED_FILES
+        from agents.run_context import CONTEXT_SELECTED_FILES_KEY, RunContextWrapper
+        from agents.selected_files import SelectedFilesState
+
+        class RecordingModel:
+            pass
+
+        selected_files = SelectedFilesState()
+        selected_files.add_file(
+            "src/app.py",
+            mode="editable",
+            reason="manual_add",
+            source="cli",
+        )
+        selected_files.add_file(
+            "tests/test_app.py",
+            mode="read_only",
+            reason="mentioned_by_user",
+            source="context_mentions",
+        )
+        agent = Agent(memory=AgentMemory(), model=RecordingModel())
+        context_wrapper = RunContextWrapper(
+            context={CONTEXT_SELECTED_FILES_KEY: selected_files}
+        )
+
+        bundle = build_turn_context(agent, context_wrapper=context_wrapper)
+
+        selected_chunks = [
+            chunk for chunk in bundle.chunks if chunk.name == CONTEXT_CHUNK_SELECTED_FILES
+        ]
+        self.assertEqual(len(selected_chunks), 1)
+        self.assertEqual(selected_chunks[0].role, "user")
+        self.assertEqual(selected_chunks[0].source, "selected_files")
+        self.assertEqual(
+            selected_chunks[0].content,
+            "Selected files:\n"
+            "- src/app.py [editable] reason=manual_add source=cli\n"
+            "- tests/test_app.py [read_only] reason=mentioned_by_user "
+            "source=context_mentions",
+        )
+        self.assertIn(selected_chunks[0].to_message(), bundle.to_messages())
+
+    def test_prepare_turn_input_renders_repo_context_from_context_wrapper(self) -> None:
+        _, build_turn_context, _ = self._load_context_api()
+        from agents import Agent, AgentMemory
+        from agents.context_chunks import CONTEXT_CHUNK_REPO_CONTEXT
+        from agents.model_turn import prepare_turn_input
+        from agents.repo_context import RepoContext, RepoContextSection
+        from agents.run_context import CONTEXT_REPO_CONTEXT_KEY, RunContextWrapper
+
+        class RecordingModel:
+            pass
+
+        repo_context = RepoContext(
+            sections=(
+                RepoContextSection(
+                    title="Selected files",
+                    content="- src/agents/context_chunks.py [read_only]",
+                    source="selected_files",
+                    priority=10,
+                ),
+            ),
+            selected_paths=("src/agents/context_chunks.py",),
+        )
+        agent = Agent(
+            memory=AgentMemory(),
+            model=RecordingModel(),
+            instructions="You are a coding agent.",
+        )
+        context_wrapper = RunContextWrapper(
+            context={CONTEXT_REPO_CONTEXT_KEY: repo_context}
+        )
+
+        turn_input = prepare_turn_input(agent, context_wrapper=context_wrapper)
+
+        self.assertEqual(turn_input.messages[0].content, "You are a coding agent.")
+        self.assertEqual(
+            turn_input.messages[1].content,
+            "Repo context:\n"
+            "Selected paths: src/agents/context_chunks.py\n\n"
+            "## Selected files\n"
+            "- src/agents/context_chunks.py [read_only]",
+        )
+        bundle = build_turn_context(agent, context_wrapper=context_wrapper)
+        self.assertIn(CONTEXT_CHUNK_REPO_CONTEXT, [chunk.name for chunk in bundle.chunks])
+
+    def test_build_turn_context_skips_empty_repo_context(self) -> None:
+        _, build_turn_context, _ = self._load_context_api()
+        from agents import Agent, AgentMemory
+        from agents.context_chunks import CONTEXT_CHUNK_REPO_CONTEXT
+        from agents.repo_context import RepoContext
+        from agents.run_context import CONTEXT_REPO_CONTEXT_KEY, RunContextWrapper
+
+        class RecordingModel:
+            pass
+
+        agent = Agent(memory=AgentMemory(), model=RecordingModel())
+        context_wrapper = RunContextWrapper(
+            context={CONTEXT_REPO_CONTEXT_KEY: RepoContext()}
+        )
+
+        bundle = build_turn_context(agent, context_wrapper=context_wrapper)
+
+        self.assertNotIn(CONTEXT_CHUNK_REPO_CONTEXT, [chunk.name for chunk in bundle.chunks])
+        self.assertTrue(all(message.content.strip() for message in bundle.to_messages()))
+
 
 if __name__ == "__main__":
     unittest.main()

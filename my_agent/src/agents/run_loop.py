@@ -30,6 +30,7 @@ from .run_recording import (
     run_verification_after_tool,
 )
 from .result import RunResult
+from .repo_context import build_task_repo_context
 from .run_steps import (
     execute_handoff,
 )
@@ -437,6 +438,8 @@ def _run_agent_loop_impl(
         record_run_stopped(run_state, step_number, "input_guardrail_triggered")
         emit_agent_end(lifecycle_hooks, context_wrapper, agent, run_state.final_answer)
         return _build_result_and_save_session(config, run_state)
+    if not is_resuming:
+        build_task_repo_context(task, context_wrapper)
 
     session_messages = _session_messages(config)
     if is_resuming and run_state.pending_tool_calls:

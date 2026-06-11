@@ -31,7 +31,7 @@ Aider 的 `abs_fnames` 和 `abs_read_only_fnames` 是这个模块最重要的参
 - 文件来自哪个模块，例如 mention detector、CLI、repo context builder。
 - selected files summary 可以进入模型输入。
 
-这个模块不读取文件内容，不做 CodeGraph 查询，不做 Git diff，也不实现 CLI `/add` `/drop`。CLI 后续可以调用这里的 API。
+这个模块不读取文件内容，不做外部索引查询，不做 Git diff，也不实现 CLI `/add` `/drop`。CLI 后续可以调用这里的 API。
 
 ## 当前旧代码缺陷
 
@@ -85,7 +85,7 @@ Aider 的 `abs_fnames` 和 `abs_read_only_fnames` 是这个模块最重要的参
 
 - 不实现 CLI 命令。
 - 不读取文件内容。
-- 不自动调用 CodeGraph。
+- 不自动调用外部检索工具。
 - 不执行编辑权限拦截，这属于后续安全编辑方案。
 
 ## 课程 1：建立 SelectedFile 数据模型
@@ -182,5 +182,4 @@ Aider 的 `abs_fnames` 和 `abs_read_only_fnames` 是这个模块最重要的参
 4. `prepare_turn_input()` 能把 selected files 作为独立 chunk 注入模型输入。
 5. PLAN02 的 matched mentions 可以被转为 selected files。
 
-完成本模块后，下一步进入 PLAN04，为 selected files 和 symbol mentions 提供代码索引查询能力。
-
+完成本模块后，下一步进入 PLAN04，为 selected files 和 symbol mentions 提供文件代码读取与轻量仓库检索能力。

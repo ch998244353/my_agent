@@ -14,7 +14,12 @@ from agents.agent import Agent
 from agents.environment import LocalEnvironment
 from agents.memory import AgentMemory
 from agents.run_config import RunConfig
-from agents.run_context import CONTEXT_ENVIRONMENT_KEY, CONTEXT_WORKSPACE_KEY
+from agents.run_context import (
+    CONTEXT_ENVIRONMENT_KEY,
+    CONTEXT_SELECTED_FILES_KEY,
+    CONTEXT_WORKSPACE_KEY,
+)
+from agents.selected_files import SelectedFilesState
 from agents.workspace import Workspace
 
 
@@ -58,8 +63,13 @@ def test_capability_pack_registrars_register_one_tool_group_each(tmp_path) -> No
     )
     assert {spec.name for spec in workspace_agent.tool_registry.list_specs()} == {
         "final_answer",
+        "find_related_workspace_files",
+        "find_workspace_files",
         "list_workspace_files",
+        "outline_workspace_file",
+        "read_workspace_lines",
         "read_workspace_file",
+        "search_workspace_code",
         "search_workspace_text",
     }
 
@@ -212,7 +222,13 @@ def test_build_coding_agent_creates_default_workspace_memory_and_run_config(tmp_
     assert setup.agent.instructions == DEFAULT_CODING_AGENT_INSTRUCTIONS
     assert setup.agent.max_steps == 20
     assert setup.workspace.root == tmp_path.resolve()
-    assert setup.run_config.context == {CONTEXT_WORKSPACE_KEY: setup.workspace}
+    selected_files = setup.run_config.context[CONTEXT_SELECTED_FILES_KEY]
+    assert isinstance(selected_files, SelectedFilesState)
+    assert selected_files.files() == ()
+    assert setup.run_config.context == {
+        CONTEXT_WORKSPACE_KEY: setup.workspace,
+        CONTEXT_SELECTED_FILES_KEY: selected_files,
+    }
     assert setup.run_config.metadata == {
         "context_summary": {
             "workspace_root": str(tmp_path.resolve()),
@@ -248,7 +264,13 @@ def test_build_coding_agent_accepts_existing_workspace_memory_and_profile(tmp_pa
     assert setup.agent.instructions == "Stay inside the repo."
     assert setup.agent.max_steps == 6
     assert setup.workspace is workspace
-    assert setup.run_config.context == {CONTEXT_WORKSPACE_KEY: workspace}
+    selected_files = setup.run_config.context[CONTEXT_SELECTED_FILES_KEY]
+    assert isinstance(selected_files, SelectedFilesState)
+    assert selected_files.files() == ()
+    assert setup.run_config.context == {
+        CONTEXT_WORKSPACE_KEY: workspace,
+        CONTEXT_SELECTED_FILES_KEY: selected_files,
+    }
     assert setup.run_config.max_turns == 3
     assert setup.run_config.max_steps == 6
 
@@ -277,8 +299,12 @@ def test_build_coding_agent_registers_shell_tools_when_explicitly_enabled(tmp_pa
     assert isinstance(setup.environment, LocalEnvironment)
     assert setup.environment.workspace is setup.workspace
     assert setup.environment.cwd == tmp_path.resolve()
+    selected_files = setup.run_config.context[CONTEXT_SELECTED_FILES_KEY]
+    assert isinstance(selected_files, SelectedFilesState)
+    assert selected_files.files() == ()
     assert setup.run_config.context == {
         CONTEXT_WORKSPACE_KEY: setup.workspace,
+        CONTEXT_SELECTED_FILES_KEY: selected_files,
         CONTEXT_ENVIRONMENT_KEY: setup.environment,
     }
     assert setup.run_config.metadata == {

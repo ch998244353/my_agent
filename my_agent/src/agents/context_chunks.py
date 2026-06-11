@@ -7,6 +7,7 @@ from .contracts import ChatMessage, MessageRole
 
 if TYPE_CHECKING:
     from .agent import Agent
+    from .run_context import RunContextWrapper
 
 CONTEXT_CHUNK_SYSTEM_INSTRUCTIONS = "system_instructions"
 CONTEXT_CHUNK_SESSION_SUMMARY = "session_summary"
@@ -24,7 +25,9 @@ RESERVED_CONTEXT_CHUNK_NAMES = (
 
 SYSTEM_CONTEXT_PRIORITY = 0
 SESSION_SUMMARY_CONTEXT_PRIORITY = 25
+REPO_CONTEXT_PRIORITY = 45
 MEMORY_CONTEXT_PRIORITY = 50
+SELECTED_FILES_CONTEXT_PRIORITY = 60
 
 
 @dataclass(frozen=True)
@@ -87,7 +90,53 @@ def _memory_messages_without_summary(
     return messages
 
 
-def build_turn_context(agent: Agent) -> TurnContextBundle:
+def _selected_files_context_chunk(
+    context_wrapper: RunContextWrapper | None,
+) -> ContextChunk | None:
+    if context_wrapper is None:
+        return None
+    selected_files = context_wrapper.selected_files
+    if selected_files is None:
+        return None
+    summary = selected_files.summary()
+    if not summary.strip():
+        return None
+    return ContextChunk(
+        name=CONTEXT_CHUNK_SELECTED_FILES,
+        role="user",
+        content=f"Selected files:\n{summary}",
+        priority=SELECTED_FILES_CONTEXT_PRIORITY,
+        source="selected_files",
+    )
+
+
+def _repo_context_chunk(
+    context_wrapper: RunContextWrapper | None,
+) -> ContextChunk | None:
+    if context_wrapper is None:
+        return None
+    repo_context = context_wrapper.repo_context
+    if repo_context is None:
+        return None
+    if (
+        not repo_context.sections
+        and not repo_context.selected_paths
+        and not repo_context.mentioned_symbols
+    ):
+        return None
+    return ContextChunk(
+        name=CONTEXT_CHUNK_REPO_CONTEXT,
+        role="user",
+        content=repo_context.to_text(),
+        priority=REPO_CONTEXT_PRIORITY,
+        source="repo_context",
+    )
+
+
+def build_turn_context(
+    agent: Agent,
+    context_wrapper: RunContextWrapper | None = None,
+) -> TurnContextBundle:
     chunks: list[ContextChunk] = []
 
     if agent.instructions:
@@ -113,6 +162,10 @@ def build_turn_context(agent: Agent) -> TurnContextBundle:
             )
         )
 
+    repo_context_chunk = _repo_context_chunk(context_wrapper)
+    if repo_context_chunk is not None:
+        chunks.append(repo_context_chunk)
+
     chunks.extend(
         ContextChunk(
             name=CONTEXT_CHUNK_MEMORY,
@@ -123,5 +176,9 @@ def build_turn_context(agent: Agent) -> TurnContextBundle:
         )
         for message in _memory_messages_without_summary(agent, summary_message)
     )
+
+    selected_files_chunk = _selected_files_context_chunk(context_wrapper)
+    if selected_files_chunk is not None:
+        chunks.append(selected_files_chunk)
 
     return TurnContextBundle(chunks=tuple(chunks))

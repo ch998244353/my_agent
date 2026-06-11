@@ -3,34 +3,30 @@ from __future__ import annotations
 from .contracts import ToolArgument, ToolSpec
 from .tools import FunctionTool
 from .workspace import Workspace, WorkspacePathError
+from .workspace_code import WorkspaceCodeReader
+from .workspace_code_tools import create_workspace_code_tools
+from .workspace_inventory import build_workspace_inventory
 
 
 # 工具会先用 Workspace.ensure_readable_path() 校验目录安全，再返回该目录下可读的相对路径列表
 def create_list_workspace_files_tool(workspace: Workspace) -> FunctionTool:
     def list_workspace_files(path: str = ".", max_entries: int = 50) -> dict[str, object]:
-        directory = workspace.ensure_readable_path(path)
-        # 列目录内容 的，所以传进来的路径必须是目录 
-        if not directory.is_dir():
-            raise WorkspacePathError(path, workspace.root, "not a directory")
-
         limit = max(0, int(max_entries))
-        entries: list[str] = []
-        truncated = False
-        for child in sorted(directory.iterdir(), key=lambda item: item.name):
-            try:
-                workspace.ensure_readable_path(child)
-            except WorkspacePathError:
-                continue
-
-            if len(entries) >= limit:
-                truncated = True
-                break
-            entries.append(workspace.relative_path(child).as_posix())
+        # 列目录内容 的，所以传进来的路径必须是目录；inventory 入口负责安全校验
+        inventory = build_workspace_inventory(
+            workspace,
+            path=path,
+            max_entries=limit,
+            max_depth=1,
+        )
+        entries = [entry.path for entry in inventory.entries if entry.readable]
+        truncated = inventory.truncated and len(entries) >= limit
 
         return {
-            "path": workspace.relative_path(directory).as_posix(),
+            "path": inventory.base_path,
             "entries": entries,
             "truncated": truncated,
+            "inventory": inventory.to_dict(),
         }
 
     return FunctionTool(
@@ -191,8 +187,10 @@ def create_search_workspace_text_tool(workspace: Workspace) -> FunctionTool:
 
 
 def create_readonly_workspace_tools(workspace: Workspace) -> list[FunctionTool]:
+    code_reader = WorkspaceCodeReader(workspace)
     return [
         create_list_workspace_files_tool(workspace),
         create_read_workspace_file_tool(workspace),
         create_search_workspace_text_tool(workspace),
+        *create_workspace_code_tools(code_reader),
     ]

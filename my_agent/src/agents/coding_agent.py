@@ -11,7 +11,12 @@ from .edit_tools import create_apply_patch_tool
 from .environment import Environment, LocalEnvironment
 from .memory import AgentMemory
 from .run_config import RunConfig
-from .run_context import CONTEXT_ENVIRONMENT_KEY, CONTEXT_WORKSPACE_KEY
+from .run_context import (
+    CONTEXT_ENVIRONMENT_KEY,
+    CONTEXT_SELECTED_FILES_KEY,
+    CONTEXT_WORKSPACE_KEY,
+)
+from .selected_files import SelectedFilesState
 from .shell_tools import create_shell_command_tool, create_test_command_tool
 from .workspace import Workspace
 from .workspace_tools import create_readonly_workspace_tools
@@ -313,7 +318,10 @@ def build_coding_agent(
             capability=capability,
         )
 
-    context: dict[str, object] = {CONTEXT_WORKSPACE_KEY: resolved_workspace}
+    context: dict[str, object] = {
+        CONTEXT_WORKSPACE_KEY: resolved_workspace,
+        CONTEXT_SELECTED_FILES_KEY: SelectedFilesState(),
+    }
     if resolved_environment is not None:
         context[CONTEXT_ENVIRONMENT_KEY] = resolved_environment
 

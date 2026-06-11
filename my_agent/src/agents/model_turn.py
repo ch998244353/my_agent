@@ -46,7 +46,7 @@ def prepare_turn_input(
     model_settings: ModelSettings | None = None,
 ) -> TurnInput:
     context_wrapper = context_wrapper or RunContextWrapper()
-    turn_context = build_turn_context(agent)
+    turn_context = build_turn_context(agent, context_wrapper=context_wrapper)
     return TurnInput(
         messages=turn_context.to_messages(),
         tool_specs=agent._tool_specs_for_model(context_wrapper),

@@ -2,7 +2,7 @@
 
 本文件用于检查 `teach/PLAN01.md` 到 `teach/PLAN05.md` 全部完成后，`my_agent` 是否真正获得“仓库理解与上下文选择能力”。它不是单个模块的测试清单，而是跨模块验收标准。新 Agent 在开始实现前应该先读本文件，明确最终要证明什么。
 
-最终目标是：当用户提出一个本地代码任务时，`my_agent` 不再只依赖模型猜测和临时工具调用，而是能先建立一份可审计、可测试、可裁剪的仓库上下文。这个上下文应包含 workspace inventory、用户提及候选、selected files、code index 结果和最终 repo context chunk。
+最终目标是：当用户提出一个本地代码任务时，`my_agent` 不再只依赖模型猜测和临时工具调用，而是能先建立一份可审计、可测试、可裁剪的仓库上下文。这个上下文应包含 workspace inventory、用户提及候选、selected files、workspace code search/read 结果和最终 repo context chunk。
 
 ## 总体验收意图
 
@@ -10,7 +10,7 @@
 
 完整链路应该是：
 
-用户任务文本进入系统后，mention detector 识别路径、文件名、测试名和符号候选；workspace inventory 提供安全可见的仓库结构；mention resolver 将候选尽量映射到真实文件；selected files state 保存本轮任务关注文件及其 read-only/editable/mentioned/auto-selected 语义；code index provider 通过 CodeGraph 或 fallback 查询补充线索；repo context builder 组合这些信息；最后 `prepare_turn_input()` 生成的模型输入中出现稳定的 `selected_files` 和 `repo_context` 内容。
+用户任务文本进入系统后，mention detector 识别路径、文件名、测试名和符号候选；workspace inventory 提供安全可见的仓库结构；mention resolver 将候选尽量映射到真实文件；selected files state 保存本轮任务关注文件及其 read-only/editable/mentioned/auto-selected 语义；workspace code reader/searcher 通过受控文件读取、grep-like 文本搜索、行号片段、轻量 outline 和相关文件推荐补充线索；repo context builder 组合这些信息；最后 `prepare_turn_input()` 生成的模型输入中出现稳定的 `selected_files` 和 `repo_context` 内容。
 
 验收时必须证明这条链路在 deterministic tests 中成立。不能只靠真实 LLM 对话手工观察。
 
@@ -26,7 +26,7 @@
 - 每个条目能表达相对路径、文件/目录类型、文件大小、readable 状态和被排除原因。
 - 扫描必须受 `Workspace` 的 allowed paths 和 ignore patterns 约束。
 - 大目录必须有 `max_entries`、`max_depth` 或等价截断机制。
-- 该模块不能读取文件内容，不能做代码索引，不能做任务相关性判断。
+- 该模块不能读取文件内容，不能做复杂代码检索，不能做任务相关性判断。
 - 原有 `workspace_tools.py` 如需复用 inventory，必须保持既有工具行为兼容。
 
 失败条件包括：直接用裸 `Path.rglob()` 暴露被 workspace 策略排除的路径；输出顺序依赖文件系统随机顺序；扫描无限目录；把文件内容读取逻辑放进 inventory。
@@ -68,23 +68,24 @@
 
 失败条件包括：selected files 只是临时 list，跨函数无法传递；mode 字段语义混乱；删除文件后 prompt 仍出现；selected files 模块直接读写文件内容。
 
-## PLAN04 验收：Code Index Provider 与工具
+## PLAN04 验收：Workspace Code Reading 与轻量检索工具
 
-`PLAN04.md` 完成后，`my_agent` 必须有统一代码索引查询接口，并能将其安全包装成模型可用工具。
+`PLAN04.md` 完成后，`my_agent` 必须在现有 `WORKSPACE_READ` 能力内拥有更适合代码任务的只读文件读取和轻量检索工具。它不应该引入 CodeGraph、CodeIndexProvider、外部索引服务或新的 CODE_INDEX capability。
 
-必须存在或等价实现 `my_agent/src/agents/code_index.py` 和 `my_agent/src/agents/code_index_tools.py`。前者至少应包含 `CodeIndexProvider` 或等价协议；后者至少应包含 `create_code_index_tools` 或等价工具注册函数。
+必须存在或等价实现 `my_agent/src/agents/workspace_code.py` 和 `my_agent/src/agents/workspace_code_tools.py`。前者至少应包含 `WorkspaceCodeReader`、`CodeLine`、`CodeSearchMatch`、`FileOutlineSymbol`、`RelatedFileCandidate` 或等价结构；后者至少应包含 `create_workspace_code_tools` 或等价工具注册函数。
 
 验收要求如下：
 
-- provider 能表达 query files、query text、query symbols 或等价能力。
-- CodeGraph 可用时，可以通过 provider 调用 CodeGraph 查询。
-- CodeGraph 不可用、索引缺失或查询失败时，必须返回 unavailable 或 fallback 结果，不能抛出未捕获异常导致 Agent run 失败。
-- fallback provider 至少能基于 workspace 安全边界做简单文本或路径搜索。
+- 能读取指定文件行号区间，并返回 path、start_line、end_line、lines、truncated。
+- 能做 grep-like 文本搜索，并返回 path、line、text、before、after 和 truncated。
+- 能基于 inventory 按完整路径、basename、路径片段或简单 pattern 查找文件候选。
+- 能对 Python 文件提取轻量 outline，包含 class、function、method 的名称、kind、line 和 parent。
+- 能根据源文件和测试文件命名规则推荐相关文件，并给出 reason。
 - 工具层输出必须有稳定 schema，适合模型阅读，也适合测试断言。
-- 工具测试必须能使用 fake provider，不依赖真实 CodeGraph 环境。
 - 所有查询结果必须受 workspace allowed paths 和 ignore patterns 约束。
+- 工具应注册在 `WORKSPACE_READ` 只读能力下，不新增复杂 capability。
 
-失败条件包括：把本机 CodeGraph 当作必然存在；工具 handler 中直接写大量搜索逻辑而不是调用 provider；测试必须依赖真实索引；索引结果暴露 workspace 外部路径。
+失败条件包括：引入 CodeGraph 或外部索引作为当前阶段依赖；新增 `CodingCapability.CODE_INDEX`；工具读取 workspace 外部路径；搜索或读取没有截断边界；outline 语法错误导致未捕获异常；测试必须依赖真实 shell、真实 LLM 或外部检索服务。
 
 ## PLAN05 验收：Repo Context Chunk Integration
 
@@ -94,7 +95,7 @@
 
 验收要求如下：
 
-- `RepoContextBuilder` 能接收 inventory、mentions、selected files 和 code index 结果。
+- `RepoContextBuilder` 能接收 inventory、mentions、selected files 和 workspace code search/read 结果。
 - 输出应分成稳定 section，例如 selected files、mentioned files、symbols、text hits、inventory summary。
 - 内容必须去重，同一路径不能在多个 section 中无意义重复堆叠。
 - 输出必须有 max sections、max entries 或 max chars 控制。
@@ -111,9 +112,9 @@
 - `my_agent/tests/test_workspace_inventory.py` 覆盖 inventory 数据结构、ignore、allowed paths、截断和稳定排序。
 - `my_agent/tests/test_context_mentions.py` 覆盖路径、文件名、测试名、符号名、去重、中文任务和 unresolved 候选。
 - `my_agent/tests/test_selected_files.py` 覆盖 add、drop、list、mode、reason、重复添加和排序稳定。
-- `my_agent/tests/test_code_index.py` 覆盖 provider 协议、fallback 行为、unavailable 行为和 workspace 安全边界。
-- `my_agent/tests/test_code_index_tools.py` 覆盖 tool schema、fake provider 输出和错误降级。
-- `my_agent/tests/test_repo_context.py` 覆盖 section 顺序、去重、截断、selected/mention/index 串联。
+- `my_agent/tests/test_workspace_code.py` 覆盖行号读取、grep-like 搜索、文件候选查找、Python outline、相关文件推荐和 workspace 安全边界。
+- `my_agent/tests/test_workspace_code_tools.py` 覆盖 tool schema、只读工具输出、截断和错误降级。
+- `my_agent/tests/test_repo_context.py` 覆盖 section 顺序、去重、截断、selected/mention/workspace code 结果串联。
 - `my_agent/tests/test_context_chunks.py` 覆盖 selected files 和 repo context 出现在模型输入中。
 
 测试不要求只能使用这些文件名，但覆盖点不能减少。核心逻辑必须用 fake workspace、fake inventory 或 fake provider 做 deterministic tests。
@@ -131,7 +132,7 @@ python -m pytest -q
 
 ```powershell
 python -m pytest tests/test_workspace_inventory.py tests/test_context_mentions.py tests/test_selected_files.py -q
-python -m pytest tests/test_code_index.py tests/test_code_index_tools.py tests/test_repo_context.py -q
+python -m pytest tests/test_workspace_code.py tests/test_workspace_code_tools.py tests/test_repo_context.py -q
 python -m pytest tests/test_context_chunks.py -q
 ```
 
@@ -151,7 +152,7 @@ python -m pytest tests/test_context_chunks.py -q
 
 场景三：符号提及。
 
-输入任务是“找出 build_turn_context 如何生成消息”。mention detector 应识别 `build_turn_context` 作为 symbol candidate。code index provider 应返回候选位置，或者在索引不可用时返回明确 unavailable/fallback 结果。
+输入任务是“找出 build_turn_context 如何生成消息”。mention detector 应识别 `build_turn_context` 作为 symbol candidate。workspace code search 应能通过文本搜索找到候选行；如果目标文件已被 selected files 选中，outline 工具应能在 Python 文件中返回同名 function 或 method 的位置。找不到时返回空结果，不抛出异常。
 
 场景四：selected files 注入。
 
@@ -159,11 +160,11 @@ selected files 包含 `src/agents/context_chunks.py` 时，`prepare_turn_input()
 
 场景五：repo context 注入。
 
-给定 fake inventory、fake mentions、fake selected files 和 fake code index results，`RepoContextBuilder` 应生成 repo context；`context_chunks.py` 应将其渲染；`prepare_turn_input()` 的 messages 中应出现 repo context 内容，并且不重复、不超长。
+给定 fake inventory、fake mentions、fake selected files 和 fake workspace code search/read results，`RepoContextBuilder` 应生成 repo context；`context_chunks.py` 应将其渲染；`prepare_turn_input()` 的 messages 中应出现 repo context 内容，并且不重复、不超长。
 
-场景六：CodeGraph 不可用。
+场景六：搜索和 outline 降级。
 
-临时禁用 CodeGraph 或使用无索引测试目录时，code index 工具应返回 unavailable 或 fallback 搜索结果。Agent run 不应因为索引不可用而崩溃。
+当搜索目录很大、命中很多或 Python 文件存在语法错误时，workspace code 工具应返回 truncated、empty 或结构化 error。Agent run 不应因为搜索过多、文件不可解码或 outline 解析失败而崩溃。
 
 ## 严格失败条件
 
@@ -172,7 +173,7 @@ selected files 包含 `src/agents/context_chunks.py` 时，`prepare_turn_input()
 - inventory、mention resolve、selected files、repo context 中任何文件访问绕过 `Workspace` 安全策略。
 - repo context 构建会读取无限文件或输出无限长度内容。
 - selected files 将 read-only 和 editable 混为一谈。
-- CodeGraph 不可用导致未捕获异常或 Agent run 崩溃。
+- 轻量搜索、行号读取或 outline 解析失败导致未捕获异常或 Agent run 崩溃。
 - context chunk 顺序不稳定，同一输入无法得到同一 messages 顺序。
 - 新增核心逻辑只能靠真实 LLM 手工测试，无法用 deterministic tests 验证。
 - 为了实现本阶段而大规模重写 `my_agent` 现有架构，破坏既有 chat、workspace tools 或 coding agent profile 行为。
@@ -185,8 +186,8 @@ selected files 包含 `src/agents/context_chunks.py` 时，`prepare_turn_input()
 1. `WorkspaceInventory` 能稳定描述当前 workspace 文件结构。
 2. `context_mentions` 能从用户任务中提取路径、文件名、测试名和符号候选。
 3. `SelectedFilesState` 能维护本轮任务关注文件，并保留 mode 与 reason。
-4. `CodeIndexProvider` 能提供统一索引查询接口，CodeGraph 不可用时有可控降级。
-5. `RepoContextBuilder` 能综合 selected files、mentions、inventory 和 index results 生成 repo context。
+4. `WorkspaceCodeReader` 和 workspace code tools 能提供受控的行号读取、文本搜索、文件候选查找、Python outline 和相关文件推荐。
+5. `RepoContextBuilder` 能综合 selected files、mentions、inventory 和 workspace code search/read results 生成 repo context。
 6. `context_chunks.py` 能渲染 selected files 和 repo context。
 7. `prepare_turn_input()` 生成的模型输入包含稳定的 selected files 和 repo context chunk。
 8. 所有新增测试和原有全量测试通过。

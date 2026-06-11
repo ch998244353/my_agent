@@ -19,6 +19,8 @@ from agents import (  # noqa: E402
     Runner,
     ToolCall,
 )
+from agents.run_context import CONTEXT_SELECTED_FILES_KEY  # noqa: E402
+from agents.selected_files import SelectedFilesState  # noqa: E402
 
 
 class ScriptedModel:
@@ -50,6 +52,57 @@ class RunContextTestCase(unittest.TestCase):
         self.assertEqual(run_context.usage["requests"], 1)
         self.assertEqual(run_context.metadata["request_id"], "req_1")
         self.assertEqual(run_context.metadata["phase"], "test")
+
+    def test_run_context_wrapper_exposes_selected_files_from_context(self) -> None:
+        selected_files = SelectedFilesState()
+        selected_files.add_file(
+            "src/agents/run_context.py",
+            mode="read_only",
+            reason="mentioned_by_user",
+            source="context_mentions",
+        )
+
+        run_context = RunContextWrapper(
+            context={CONTEXT_SELECTED_FILES_KEY: selected_files}
+        )
+
+        self.assertIs(run_context.selected_files, selected_files)
+
+    def test_run_context_wrapper_selected_files_is_none_when_type_mismatch(self) -> None:
+        run_context = RunContextWrapper(
+            context={CONTEXT_SELECTED_FILES_KEY: "not selected files"}
+        )
+
+        self.assertIsNone(run_context.selected_files)
+
+    def test_run_context_wrapper_exposes_repo_context_from_context(self) -> None:
+        from agents import run_context as run_context_module
+        from agents.repo_context import RepoContext, RepoContextSection
+
+        repo_context = RepoContext(
+            sections=(
+                RepoContextSection(
+                    title="Selected files",
+                    content="- src/agents/run_context.py [read_only]",
+                    source="selected_files",
+                    priority=10,
+                ),
+            )
+        )
+        run_context = RunContextWrapper(
+            context={run_context_module.CONTEXT_REPO_CONTEXT_KEY: repo_context}
+        )
+
+        self.assertIs(run_context.repo_context, repo_context)
+
+    def test_run_context_wrapper_repo_context_is_none_when_type_mismatch(self) -> None:
+        from agents import run_context as run_context_module
+
+        run_context = RunContextWrapper(
+            context={run_context_module.CONTEXT_REPO_CONTEXT_KEY: "not repo context"}
+        )
+
+        self.assertIsNone(run_context.repo_context)
 
     def test_runner_creates_context_wrapper_from_run_config(self) -> None:
         business_context = {"tenant": "acme"}

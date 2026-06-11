@@ -6,15 +6,86 @@
 
 ## 本阶段要解决什么
 
-当前 `my_agent` 已经具备一些基础能力：有 `Workspace` 安全边界，有 workspace 读写与搜索工具，有 turn context 和 context chunk，有 coding agent profile，也有比较完整的测试基础。但是它还缺少 Coding Agent 最关键的第一层能力：在回答或修改代码前，先知道仓库里有什么、用户提到了什么文件、当前任务应该关注哪些文件、索引系统能找到哪些相关代码、最后如何把这些信息稳定注入模型输入。
+当前 `my_agent` 已经具备一些基础能力：有 `Workspace` 安全边界，有 workspace 读写与搜索工具，有 turn context 和 context chunk，有 coding agent profile，也有比较完整的测试基础。但是它还缺少 Coding Agent 最关键的第一层能力：在回答或修改代码前，先知道仓库里有什么、用户提到了什么文件、当前任务应该关注哪些文件、workspace code reader 能找到哪些相关代码、最后如何把这些信息稳定注入模型输入。
 
 没有这一层能力，后续即使添加编辑器、patch、测试 runner、任务规划器，Agent 仍然会依赖临时搜索和模型猜测。那会导致文件选择不可审计、上下文不稳定、跨轮任务记忆断裂，也很难在测试中验证。
 
 本阶段完成后，`my_agent` 应该形成一条清晰的数据链路：
 
-用户任务文本进入 Agent 后，先被 mention detector 识别出路径、文件名、测试名和符号候选；这些候选再结合 workspace inventory 解析成真实仓库文件；selected files state 维护本轮任务关注文件；code index provider 通过 CodeGraph 或 fallback 搜索补充符号和文本线索；repo context builder 将这些结果压缩成稳定的 `repo_context`；最后 `context_chunks.py` 和 `model_turn.py` 把 selected files 与 repo context 注入模型输入。
+用户任务文本进入 Agent 后，先由 workspace inventory 建立仓库观察层，再由 mention detector 识别路径、文件名、测试名和符号候选；这些候选结合 inventory 解析成真实仓库文件；selected files state 维护本轮任务关注文件；`WorkspaceCodeReader` 通过本地安全读写边界补充文件查找、文本命中、符号大纲和相关文件线索；`RepoContextBuilder` 将这些结果压缩成稳定的 `repo_context`；最后 `context_chunks.py` 和 `model_turn.py` 把 selected files 与 repo context 注入模型输入。
 
 这条链路的核心不是“多塞上下文”，而是“让上下文来源可解释、可测试、可裁剪、可回滚”。
+
+## 仓库上下文查找分析装置总流程图
+
+下面的流程图只描述当前 `my_agent` 已经落地的主集成链路，忽略正则清洗、排序、字典转换等小型 helper。它的主线是：先收集仓库结构，再从用户文本中提取候选，再维护本轮关注文件，再用 workspace code reader 做精确查找，最后组装成 repo context 并进入 chunk 准备层。
+
+```mermaid
+flowchart TD
+    Task["用户任务文本 task"] --> Mentions["resolve_mentions_against_inventory(text, inventory)"]
+    Workspace["Workspace(root, allowed_paths, ignore_patterns)"] --> InventoryFn["build_workspace_inventory(workspace, path, max_entries, max_depth)"]
+    InventoryFn --> Inventory["WorkspaceInventory\nroot/base_path/entries/truncated"]
+    Inventory --> Entries["WorkspaceFileEntry\npath/kind/size/readable/ignored/reason"]
+    Entries --> Mentions
+
+    Mentions --> Candidate["MentionCandidate\ntext/kind/confidence/matched_path/source"]
+    Candidate --> SelectBridge["add_task_mentions_to_selected_files(task, context_wrapper)\n或 SelectedFilesState.add_mentions(candidates)"]
+    SelectBridge --> SelectedState["SelectedFilesState"]
+    SelectedState --> SelectedFile["SelectedFile\npath/mode/read_only|editable/reason/source"]
+
+    Workspace --> Reader["WorkspaceCodeReader(workspace)"]
+    Inventory -. "find_files / find_related_files / search_text 扫描时复用 inventory" .-> Reader
+    Reader --> CodeOps["精确查找能力\nread_lines/search_text/find_files/outline_file/find_related_files"]
+    CodeOps --> ToolLayer["workspace_code_tools.py\ncreate_workspace_code_tools(reader)\n把读取/搜索/outline/相关文件暴露成 FunctionTool"]
+
+    Candidate --> Builder["RepoContextBuilder(selected_files, mentions, workspace_code_reader, max_chars)"]
+    SelectedState --> Builder
+    Reader --> Builder
+    Builder --> SectionA["Selected files section\npriority=10"]
+    Builder --> SectionB["Mentioned paths section\npriority=20"]
+    Builder --> SectionC["Mentioned symbols section\npriority=30"]
+    SectionC --> SymbolSearch["workspace_code_reader.search_text(symbol, max_results=3, context_lines=0)"]
+    SymbolSearch --> SectionD["Workspace code matches section\npriority=40"]
+
+    SectionA --> RepoContext["RepoContext\nsections/selected_paths/mentioned_symbols/truncated"]
+    SectionB --> RepoContext
+    SectionC --> RepoContext
+    SectionD --> RepoContext
+    RepoContext --> Budget["去重与裁剪\n_unique_sections + _limit_context(max_chars)"]
+    Budget --> RunContextRepo["RunContextWrapper.context[repo_context]"]
+    SelectedState --> RunContextSelected["RunContextWrapper.context[selected_files]"]
+
+    RunContextRepo --> BuildChunks["build_turn_context(agent, context_wrapper)"]
+    RunContextSelected --> BuildChunks
+    BuildChunks --> RepoChunk["_repo_context_chunk()\nContextChunk(name=repo_context, role=user, priority=45)"]
+    BuildChunks --> SelectedChunk["_selected_files_context_chunk()\nContextChunk(name=selected_files, role=user, priority=60)"]
+    RepoChunk --> Bundle["TurnContextBundle(chunks)"]
+    SelectedChunk --> Bundle
+    Bundle --> Messages["render_context_messages()\n按 priority 排序并跳过空 chunk"]
+    Messages --> TurnInput["prepare_turn_input()\nTurnInput.messages/tool_specs/model_settings"]
+```
+
+### 主契约类和集成功能
+
+| 层级 | 文件 | 基本契约类 | 主集成功能 | 信息如何被加工 |
+| --- | --- | --- | --- | --- |
+| 仓库观察层 | `workspace_inventory.py` | `WorkspaceInventory`、`WorkspaceFileEntry` | `build_workspace_inventory()` | 输入 `Workspace` 和扫描参数，经过 `Workspace.ensure_readable_path()`、allowed paths、ignore patterns 过滤后，输出稳定排序的仓库路径清单；每个 entry 只描述路径、类型、大小、可读性和忽略原因，不读取文件内容。 |
+| 用户 text 查找层 | `context_mentions.py` | `MentionCandidate` | `detect_file_mentions()`、`resolve_mentions_against_inventory()` | 输入用户任务文本和 `WorkspaceInventory`；先识别 path、filename、test、symbol 候选，再用 inventory 的完整路径索引和 basename 索引解析真实文件，解析成功时写入 `matched_path` 并把 `source` 改成 `inventory`。 |
+| 文件选中层 | `selected_files.py` | `SelectedFilesState`、`SelectedFile` | `add_task_mentions_to_selected_files()`、`SelectedFilesState.add_mentions()` | `add_task_mentions_to_selected_files()` 从 `RunContextWrapper` 取 `workspace` 和 `selected_files`，内部重新构建 inventory 并解析 mentions；`add_mentions()` 只把带 `matched_path` 的候选加入状态，形成带 mode、reason、source 的关注文件列表，`editable` 优先级高于 `read_only`。 |
+| 精确查找目标层 | `workspace_code.py` | `WorkspaceCodeReader`、`CodeSearchMatch`、`FileOutlineSymbol`、`RelatedFileCandidate` | `read_lines()`、`search_text()`、`find_files()`、`outline_file()`、`find_related_files()` | 输入安全 workspace 和查询参数；所有路径先经过 `ensure_readable_path()`，文本搜索和文件查找会复用 inventory 控制扫描范围，输出行片段、文本命中、文件候选、Python 符号大纲或测试/源码相关文件候选。 |
+| 工具暴露层 | `workspace_code_tools.py` | `FunctionTool` 列表 | `create_workspace_code_tools()` | 把 `WorkspaceCodeReader` 的读取、搜索、文件查找、outline、相关文件能力包装成模型可调用工具；它只转发参数和结果，不直接决定哪些信息进入 prompt。 |
+| 上下文组装层 | `repo_context.py` | `RepoContextSection`、`RepoContext`、`RepoContextBuilder` | `RepoContextBuilder.build()` | 输入 selected files、mentions 和 workspace code reader；按 priority 生成 selected files、mentioned paths、mentioned symbols、workspace code matches 四类 section，再生成 `RepoContext`；初始化时去重重复 section，最后按 `max_chars` 保留高优先级 section 并设置 `truncated`。 |
+| 运行态注入层 | `run_context.py` | `RunContextWrapper` | `repo_context`、`selected_files` property | 调用方把 `RepoContext` 放入 `context[CONTEXT_REPO_CONTEXT_KEY]`，把 `SelectedFilesState` 放入 `context[CONTEXT_SELECTED_FILES_KEY]`；wrapper 只做类型安全读取，类型不匹配返回 `None`。 |
+| chunk 准备层 | `context_chunks.py`、`model_turn.py` | `ContextChunk`、`TurnContextBundle`、`TurnInput` | `build_turn_context()`、`_repo_context_chunk()`、`_selected_files_context_chunk()`、`prepare_turn_input()` | `build_turn_context()` 从 wrapper 读取 repo context 和 selected files，分别渲染成 `repo_context` 和 `selected_files` chunk；`render_context_messages()` 按 priority 输出消息并跳过空内容；`prepare_turn_input()` 最终生成模型本轮使用的 `messages`、`tool_specs` 和 `model_settings`。 |
+
+### 信息加工主线
+
+1. 信息收集：`Workspace` 定义安全边界，`build_workspace_inventory()` 在这个边界内生成 `WorkspaceInventory.entries`。
+2. 信息识别：`resolve_mentions_against_inventory()` 把用户文本变成 `MentionCandidate`，其中路径类候选尽量解析成真实 `matched_path`，符号类候选保留为后续搜索关键词。
+3. 信息分类：`SelectedFilesState` 将已解析文件变成 read-only 或 editable 的任务关注文件；未解析符号仍留在 mentions 中，不直接变成文件。
+4. 精确查找：`WorkspaceCodeReader` 根据路径、文件名、符号或相关文件规则，在 workspace 安全边界内返回代码行、搜索命中、大纲和相关文件候选。
+5. 上下文汇总：`RepoContextBuilder.build()` 把 selected files、mentioned paths、mentioned symbols、workspace code matches 合并成 `RepoContextSection`，再由 `RepoContext` 去重、排序和字符预算裁剪。
+6. 模型输入注入：`RunContextWrapper.repo_context` 暴露 `RepoContext`，`_repo_context_chunk()` 把它变成 `ContextChunk(name="repo_context")`，`prepare_turn_input()` 最终把它放入 `TurnInput.messages`。
 
 ## 新 Agent 的阅读顺序
 
@@ -50,7 +121,7 @@
 
 - `reference/aider-main/` 主要参考 repo map、文件选择、chat chunks、只读/可编辑文件语义。
 - `reference/OpenHands-main/` 主要参考 workspace 状态、会话隔离、运行态上下文和工具环境边界。
-- 另一个参考项目以其 `PROJECT_ARCHITECTURE_ANALYSIS.md` 中描述的能力为准，只选择和“仓库理解、上下文选择、索引查询”直接相关的部分。
+- 另一个参考项目以其 `PROJECT_ARCHITECTURE_ANALYSIS.md` 中描述的能力为准，只选择和“仓库理解、上下文选择、workspace code 查询”直接相关的部分。
 
 阅读参考源码前，先读对应项目的 `PROJECT_ARCHITECTURE_ANALYSIS.md`。参考项目不是模板库，不要逐文件模仿；只抽取能力设计和边界划分。
 
@@ -62,7 +133,7 @@
 
 `PLAN03.md` 建立 `SelectedFilesState`。它把“用户提到的文件”“系统自动选择的文件”“只读参考文件”“允许编辑文件”变成显式状态，为后续编辑器和 prompt 注入做准备。
 
-`PLAN04.md` 建立 `CodeIndexProvider` 和相关工具。它让 `my_agent` 能通过 CodeGraph 或 fallback 检索文件、文本和符号，同时保证索引不可用时不会导致 Agent 崩溃。
+`PLAN04.md` 建立 `WorkspaceCodeReader` 和相关工具。它让 `my_agent` 能在 `Workspace` 安全边界内读取代码行、搜索文本、查找文件、生成 Python 文件大纲和寻找相关测试/源码文件。
 
 `PLAN05.md` 把前四步串成 `RepoContextBuilder`，并通过 context chunk 注入模型输入。这一步完成后，本阶段才算真正闭环。
 
@@ -78,13 +149,13 @@
 
 `selected_files.py` 只负责维护文件选择状态。它不能执行文件编辑，也不能绕过 workspace 权限。
 
-`code_index.py` 只负责定义索引查询协议和 provider 行为。它不能把 provider 结果直接写进 prompt。
+`workspace_code.py` 只负责在 workspace 安全边界内执行代码读取、文本搜索、文件查找、Python outline 和相关文件查找。它不能把查询结果直接写进 prompt。
 
-`code_index_tools.py` 只负责把索引 provider 包装成模型工具。它不能绑定真实 CodeGraph 环境到测试中。
+`workspace_code_tools.py` 只负责把 `WorkspaceCodeReader` 包装成模型工具。它不能决定哪些查询结果进入 prompt。
 
-`repo_context.py` 只负责把 inventory、mentions、selected files、index results 组织成可渲染上下文。它不能无限读文件，也不能进行代码修改。
+`repo_context.py` 只负责把 inventory、mentions、selected files、workspace code matches 组织成可渲染上下文。它不能无限读文件，也不能进行代码修改。
 
-`context_chunks.py` 只负责渲染 chunk。它不应该承担 mention 解析、索引查询或 selected files 状态维护。
+`context_chunks.py` 只负责渲染 chunk。它不应该承担 mention 解析、workspace code 查询或 selected files 状态维护。
 
 这种分工的目的，是让每个模块都能用 deterministic tests 验证，而不是依赖真实 LLM 行为。
 
@@ -96,11 +167,11 @@
 
 每个 PLAN 的新增业务代码总量目标是 300 到 2000 行，不含测试和复用代码。少于 300 行时通常说明模块边界可能过窄或验收不足；超过 2000 行时通常说明一次纳入了过多能力，应该拆到后续阶段。
 
-实现时优先复用现有 `Workspace`、tool registry、context chunk 和 tests 风格。不要为了模仿参考项目引入大型框架、复杂缓存、后台服务或异步索引守护进程。
+实现时优先复用现有 `Workspace`、tool registry、context chunk 和 tests 风格。不要为了模仿参考项目引入大型框架、复杂缓存、后台服务或异步扫描守护进程。
 
 所有路径处理必须经过 `Workspace` 的安全策略。任何 inventory、mention resolve、repo context 文件访问都不能绕过 allowed paths 和 ignore patterns。
 
-CodeGraph 是加速索引能力，不是硬依赖。CodeGraph 不可用、索引不存在、查询失败时，`my_agent` 应该返回 unavailable/fallback 结果，而不是让 Agent run 崩溃。
+`WorkspaceCodeReader` 是轻量本地代码查询能力，不依赖外部索引服务。文件不可读、不是 UTF-8、不是 Python 文件或查询为空时，应返回可解释的空结果或 error 字段，而不是让 Agent run 崩溃。
 
 ## 不在本阶段实现的内容
 
@@ -144,7 +215,7 @@ CodeGraph 是加速索引能力，不是硬依赖。CodeGraph 不可用、索引
 - workspace inventory 能稳定描述仓库结构。
 - mention detection 能从用户任务中提取并解析相关候选。
 - selected files 能维护本轮任务关注文件。
-- code index provider 能查询或优雅降级。
+- workspace code reader 能查询或优雅降级。
 - repo context 能综合前述信息生成稳定 chunk。
 - `prepare_turn_input()` 生成的 messages 中确实包含 selected files 和 repo context。
 
