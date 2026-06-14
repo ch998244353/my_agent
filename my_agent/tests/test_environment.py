@@ -33,12 +33,16 @@ def test_command_result_serializes_to_stable_observation() -> None:
         "succeeded": False,
     }
     assert result.to_observation() == (
-        "Command observation\n"
+        "Tool observation\n"
+        "tool: command\n"
         "status: error\n"
-        "command: python -m pytest\n"
-        "cwd: C:/work/project\n"
-        "returncode: 1\n"
-        "timed_out: false\n"
+        "summary: Command failed with exit code 1.\n"
+        "details:\n"
+        "  command: python -m pytest\n"
+        "  cwd: C:/work/project\n"
+        "  returncode: 1\n"
+        "  timed_out: false\n"
+        "output:\n"
         "stdout:\n"
         "1 failed\n"
         "stderr:\n"
@@ -57,7 +61,8 @@ def test_command_result_marks_timeout() -> None:
 
     assert result.succeeded is False
     assert result.to_dict()["timed_out"] is True
-    assert "status: timeout" in result.to_observation()
+    assert "status: error" in result.to_observation()
+    assert "summary: Command timed out." in result.to_observation()
 
 
 def test_local_environment_stores_constructor_defaults(tmp_path) -> None:

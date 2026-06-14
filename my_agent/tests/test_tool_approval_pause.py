@@ -13,7 +13,9 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from agents import Agent, AgentMemory, ToolCall  # noqa: E402
+from agents.coding_agent import CodingAgentProfile, build_coding_agent  # noqa: E402
 from agents.contracts import ModelResponse, ToolApprovalRequest  # noqa: E402
+from agents.environment import CommandResult  # noqa: E402
 from agents.run_context import RunContextWrapper  # noqa: E402
 from agents.run_state import ApprovalSnapshot, RunState, RunStateSnapshot  # noqa: E402
 from agents.run_steps import (  # noqa: E402
@@ -23,6 +25,8 @@ from agents.run_steps import (  # noqa: E402
     resolve_tool_final_output_step,
 )
 from agents.tools import function_tool  # noqa: E402
+from agents.trajectory import trajectory_events_from_result  # noqa: E402
+from agents.workspace_manifest import WorkspaceManifest  # noqa: E402
 
 
 class RecordingModel:
@@ -94,6 +98,80 @@ class ApprovalFlowModel:
             response_id="resp_unexpected",
             output=[],
             output_text="model was called before approval finished",
+            tool_calls=[],
+        )
+
+    def record_tool_output(self, action: ToolCall, output: str) -> None:
+        self.tool_outputs.append((action, output))
+
+
+class RecordingShellEnvironment:
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+
+    def run(
+        self,
+        command,
+        cwd=None,
+        *,
+        timeout_seconds=None,
+        env=None,
+    ) -> CommandResult:
+        self.commands.append(command)
+        return CommandResult(
+            command=command,
+            cwd=cwd or ".",
+            returncode=0,
+            stdout=f"ran {command}",
+        )
+
+
+CODING_SMOKE_PATCH = """*** Begin Patch
+*** Update File: calc.py
+@@
+-def add(a, b):
+-    return a - b
++def add(a, b):
++    return a + b
+*** End Patch"""
+
+
+class CodingSmokeModel:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.tool_outputs: list[tuple[ToolCall, str]] = []
+
+    def get_response(self, messages, tool_specs):
+        _ = messages, tool_specs
+        self.calls += 1
+        sequence = [
+            ToolCall("list_workspace_files", {"path": "."}, "call_list"),
+            ToolCall("read_workspace_file", {"path": "calc.py"}, "call_read"),
+            ToolCall("run_test_command", {}, "call_test_before"),
+            ToolCall(
+                "apply_patch",
+                {"patch": CODING_SMOKE_PATCH, "dry_run": True},
+                "call_patch_dry",
+            ),
+            ToolCall(
+                "apply_patch",
+                {"patch": CODING_SMOKE_PATCH, "dry_run": False},
+                "call_patch_apply",
+            ),
+            ToolCall("run_test_command", {}, "call_test_after"),
+            ToolCall("final_answer", {"answer": "smoke complete"}, "call_final"),
+        ]
+        if self.calls <= len(sequence):
+            return ModelResponse(
+                response_id=f"resp_{self.calls}",
+                output=[],
+                output_text=None,
+                tool_calls=[sequence[self.calls - 1]],
+            )
+        return ModelResponse(
+            response_id=f"resp_{self.calls}",
+            output=[],
+            output_text=None,
             tool_calls=[],
         )
 
@@ -419,6 +497,167 @@ def test_approval_resume_round_trip_approved_continues_run_loop() -> None:
     assert resumed_result.reached_final_answer is True
     assert resumed_result.final_answer == "model saw: deleted notes.txt"
     assert model.calls == 2
+
+
+def test_unapproved_snapshot_resume_still_reports_pending_approval() -> None:
+    calls: list[str] = []
+
+    def delete_file(path: str) -> str:
+        calls.append(path)
+        return f"deleted {path}"
+
+    action = ToolCall("delete_file", {"path": "notes.txt"}, "call_round_trip_pending")
+    model = ApprovalFlowModel(action)
+    agent = Agent(memory=AgentMemory(), model=model)
+    agent.tool_registry.register(function_tool(delete_file, needs_approval=True))
+
+    first_result = agent.run("delete notes.txt")
+    snapshot = first_result.to_state()
+    restored_state = RunState.from_snapshot(snapshot, agent=agent)
+
+    resumed_result = _resume_agent_loop()(agent, restored_state)
+
+    assert calls == []
+    assert resumed_result.has_pending_approvals is True
+    assert len(resumed_result.pending_approval_summaries) == 1
+    assert resumed_result.pending_approval_summaries[0].tool_name == "delete_file"
+    assert resumed_result.pending_approval_summaries[0].call_id == "call_round_trip_pending"
+    assert model.calls == 1
+
+
+def test_coding_agent_risky_shell_approval_round_trip_executes_after_context_approval(
+    tmp_path,
+) -> None:
+    action = ToolCall(
+        "run_shell_command",
+        {"command": "pip install requests"},
+        "call_shell_approval",
+    )
+    model = ApprovalFlowModel(action)
+    environment = RecordingShellEnvironment()
+    setup = build_coding_agent(
+        model=model,
+        workspace=tmp_path,
+        profile=CodingAgentProfile.shell_test(),
+        environment=environment,
+    )
+
+    first_result = setup.agent.run("install a dependency", config=setup.run_config)
+
+    assert environment.commands == []
+    assert first_result.has_pending_approvals is True
+    approval = first_result.pending_approval_summaries[0]
+    assert approval.tool_name == "run_shell_command"
+    assert approval.call_id == "call_shell_approval"
+    snapshot = first_result.to_state()
+    context = RunContextWrapper(context=setup.run_config.context)
+    context.approve_tool_call(approval.tool_name, approval.call_id)
+    restored_state = RunState.from_snapshot(
+        snapshot,
+        agent=setup.agent,
+        context_wrapper=context,
+    )
+
+    resumed_result = _resume_agent_loop()(setup.agent, restored_state, setup.run_config)
+
+    assert environment.commands == ["pip install requests"]
+    assert resumed_result.has_pending_approvals is False
+    assert resumed_result.reached_final_answer is True
+    assert "ran pip install requests" in resumed_result.final_answer
+    assert model.calls == 2
+
+
+def test_edit_local_smoke_pauses_actual_patch_then_resumes_with_trajectory(
+    tmp_path,
+) -> None:
+    repo = tmp_path / "repo"
+    (repo / "tests").mkdir(parents=True)
+    calc_path = repo / "calc.py"
+    calc_path.write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    (repo / "tests" / "test_calc.py").write_text(
+        "from calc import add\n\n"
+        "def test_add():\n"
+        "    assert add(1, 2) == 3\n",
+        encoding="utf-8",
+    )
+    model = CodingSmokeModel()
+    manifest = WorkspaceManifest(
+        root=repo,
+        default_test_command="python -m pytest -q",
+    )
+    setup = build_coding_agent(
+        model=model,
+        manifest=manifest,
+        profile=CodingAgentProfile.edit_local(max_turns=20, max_steps=20),
+    )
+
+    first_result = setup.agent.run(
+        "Run the end-to-end coding smoke.",
+        config=setup.run_config,
+    )
+
+    assert first_result.has_pending_approvals is True
+    approval = first_result.pending_approval_summaries[0]
+    assert approval.tool_name == "apply_patch"
+    assert approval.call_id == "call_patch_apply"
+    assert "return a - b" in calc_path.read_text(encoding="utf-8")
+    assert [call.call_id for call, _ in model.tool_outputs] == [
+        "call_list",
+        "call_read",
+        "call_test_before",
+        "call_patch_dry",
+    ]
+    first_event_types = [
+        event.event_type
+        for event in trajectory_events_from_result(
+            first_result,
+            run_id="smoke_first",
+            task="Run the end-to-end coding smoke.",
+            workspace_root=str(repo),
+        )
+    ]
+    assert "approval_required" in first_event_types
+    assert first_event_types[-1] == "run_stopped"
+
+    snapshot = first_result.to_state()
+    context = RunContextWrapper(context=setup.run_config.context)
+    context.approve_tool_call(approval.tool_name, approval.call_id)
+    restored_state = RunState.from_snapshot(
+        snapshot,
+        agent=setup.agent,
+        context_wrapper=context,
+    )
+
+    resumed_result = _resume_agent_loop()(
+        setup.agent,
+        restored_state,
+        setup.run_config,
+    )
+
+    assert resumed_result.has_pending_approvals is False
+    assert resumed_result.reached_final_answer is True
+    assert resumed_result.final_answer == "smoke complete"
+    assert "return a + b" in calc_path.read_text(encoding="utf-8")
+    assert [call.call_id for call, _ in model.tool_outputs] == [
+        "call_list",
+        "call_read",
+        "call_test_before",
+        "call_patch_dry",
+        "call_patch_apply",
+        "call_test_after",
+        "call_final",
+    ]
+    resumed_event_types = [
+        event.event_type
+        for event in trajectory_events_from_result(
+            resumed_result,
+            run_id="smoke_resumed",
+            task="Run the end-to-end coding smoke.",
+            workspace_root=str(repo),
+        )
+    ]
+    assert "approval_required" in resumed_event_types
+    assert resumed_event_types[-1] == "final_output"
 
 
 def test_approval_resume_round_trip_rejected_continues_run_loop() -> None:

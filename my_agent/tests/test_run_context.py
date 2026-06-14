@@ -19,8 +19,12 @@ from agents import (  # noqa: E402
     Runner,
     ToolCall,
 )
-from agents.run_context import CONTEXT_SELECTED_FILES_KEY  # noqa: E402
+from agents.run_context import (  # noqa: E402
+    CONTEXT_SELECTED_FILES_KEY,
+    CONTEXT_WORKSPACE_MANIFEST_KEY,
+)
 from agents.selected_files import SelectedFilesState  # noqa: E402
+from agents.workspace_manifest import WorkspaceManifest  # noqa: E402
 
 
 class ScriptedModel:
@@ -74,6 +78,25 @@ class RunContextTestCase(unittest.TestCase):
         )
 
         self.assertIsNone(run_context.selected_files)
+
+    def test_run_context_wrapper_exposes_workspace_manifest_from_context(
+        self,
+    ) -> None:
+        manifest = WorkspaceManifest(root=PROJECT_ROOT)
+        run_context = RunContextWrapper(
+            context={CONTEXT_WORKSPACE_MANIFEST_KEY: manifest}
+        )
+
+        self.assertIs(run_context.workspace_manifest, manifest)
+
+    def test_run_context_wrapper_workspace_manifest_is_none_when_type_mismatch(
+        self,
+    ) -> None:
+        run_context = RunContextWrapper(
+            context={CONTEXT_WORKSPACE_MANIFEST_KEY: "not manifest"}
+        )
+
+        self.assertIsNone(run_context.workspace_manifest)
 
     def test_run_context_wrapper_exposes_repo_context_from_context(self) -> None:
         from agents import run_context as run_context_module

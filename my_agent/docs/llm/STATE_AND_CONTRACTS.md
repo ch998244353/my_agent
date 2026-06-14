@@ -20,6 +20,16 @@
 - Invariants: typed context accessors return `None` on missing keys or type mismatch; approval keys are `(tool_name, call_id)` (`src/agents/run_context.py:RunContextWrapper._context_value`; `src/agents/run_context.py:RunContextWrapper._approval_key`).
 - Serialization: approvals export through `export_tool_approvals` and import through `import_tool_approvals`; arbitrary `context` is not serialized by `RunResult.to_state` (`src/agents/run_context.py:RunContextWrapper.export_tool_approvals`; `src/agents/run_context.py:RunContextWrapper.import_tool_approvals`; `src/agents/result.py:RunResultBase.to_state`).
 
+## `WorkspaceManifest`
+
+- Owned data: user-facing local coding policy for `root`, `allowed_paths`, `ignore_patterns`, `default_test_command`, `allowed_test_commands`, and environment key/value defaults (`src/agents/workspace_manifest.py:WorkspaceManifest`).
+- Lifecycle: built directly by user code or by `build_coding_cli_setup`; `build_coding_agent` can accept it and derive the runtime `Workspace` from it (`src/agents/coding_cli.py:build_coding_cli_setup`; `src/agents/coding_agent.py:build_coding_agent`).
+- Producers: local coding CLI, direct coding-agent builder callers, and tests (`src/agents/coding_cli.py:CodingCliConfig`; `tests/test_workspace_manifest.py`).
+- Consumers: `build_coding_agent`, `RunConfig.context`, shell/test tool registration, and metadata/trajectory callers (`src/agents/coding_agent.py:build_coding_agent`; `src/agents/run_context.py:CONTEXT_WORKSPACE_MANIFEST_KEY`; `src/agents/shell_tools.py:create_test_command_tool`).
+- Mutation rules: frozen dataclass; `__post_init__` normalizes tuple fields, stores a dict copy of env, and ensures `allowed_test_commands` contains `default_test_command` exactly once (`src/agents/workspace_manifest.py:WorkspaceManifest.__post_init__`).
+- Invariants: `resolved_root()` expands and resolves without requiring the path to exist; `build_workspace()` delegates root/path/ignore enforcement to `Workspace`; `metadata()` is JSON-safe and exposes env keys only, not env values (`src/agents/workspace_manifest.py:WorkspaceManifest.resolved_root`; `src/agents/workspace_manifest.py:WorkspaceManifest.build_workspace`; `src/agents/workspace_manifest.py:WorkspaceManifest.metadata`).
+- Serialization: no full manifest snapshot is embedded in `RunStateSnapshot`; use `metadata()` for summaries and avoid dumping arbitrary env values (`src/agents/workspace_manifest.py:WorkspaceManifest.metadata`; `src/agents/result.py:RunResultBase.to_state`).
+
 ## `RunState`
 
 - Owned data: `new_items`, input, last agent, final answer flags, counters/limits, handoff depth, context wrapper, pending tool calls, guardrail result lists (`src/agents/run_state.py:RunState`).
@@ -40,6 +50,15 @@
 - Invariants: `final_output` aliases `final_answer`; `pending_approvals` derives from `new_items`; `last_response_id` derives from `raw_responses[-1]` (`src/agents/result.py:RunResultBase.final_output`; `src/agents/result.py:RunResultBase.pending_approvals`; `src/agents/result.py:RunResultBase.last_response_id`).
 - Serialization: `to_state` creates `RunStateSnapshot` via `asdict`; known payload converters exist for `ToolCall`, `ToolApprovalRequest`, `ModelResponse`, and `VerificationSummary`; arbitrary payloads pass through (`src/agents/result.py:RunResultBase.to_state`; `src/agents/result.py:_run_item_payload_to_state`).
 
+## Trajectory JSONL Contract
+
+- `TrajectoryEvent` owns `event_type`, `run_id`, optional `step`, JSON-safe `payload`, and UTC timestamp; `to_dict()` is the only writer-facing shape (`src/agents/trajectory.py:TrajectoryEvent`).
+- Event producers consume an existing `RunResult`; trajectory export must not mutate `RunState`, force CLI use, or serialize arbitrary `RunConfig.context` values (`src/agents/trajectory.py:trajectory_events_from_result`; `src/agents/coding_cli.py:_write_trajectory_from_result`).
+- Supported event types are `run_started`, `model_response`, `model_error`, `tool_call`, `tool_result`, `tool_error`, `approval_required`, `approval_rejected`, `verification_result`, `verification_skipped`, `run_stopped`, `final_output`, and fallback `runtime_item` (`src/agents/trajectory.py:_RUN_ITEM_EVENT_TYPES`; `src/agents/trajectory.py:_event_type_from_run_item`).
+- Rejected approvals are derived from `tool_result` metadata, because runtime history has no separate rejected-approval `RunItem` type (`src/agents/trajectory.py:_is_rejected_approval_result`; `src/agents/run_resume.py:resume_pending_tool_approvals`).
+- Unknown runtime items are preserved as `runtime_item` with `original_item_type`, so later event types can be inspected without breaking old readers (`src/agents/trajectory.py:_event_from_run_item`).
+- JSONL writing creates parent directories and overwrites by default; append requires explicit `append=True` (`src/agents/trajectory.py:write_trajectory_jsonl`).
+
 ## Message, Tool, and Model Contracts
 
 - `ChatMessage`: role must be one of `system`, `user`, `assistant`, `tool_call`, `tool_response`; content is string (`src/agents/contracts.py:MessageRole`; `src/agents/contracts.py:ChatMessage`).
@@ -56,6 +75,23 @@
 - `ToolRegistry.register` overwrites by tool name without warning; `get` raises `ToolNotFoundError`; `list_specs` filters disabled tools (`src/agents/tools.py:ToolRegistry.register`; `src/agents/tools.py:ToolRegistry.get`; `src/agents/tools.py:ToolRegistry.list_specs`).
 - `tool_use_behavior` controls stopping after tool output; valid values are `"run_llm_again"`, `"stop_on_first_tool"`, or dict `stop_at_tool_names` (`src/agents/tool_execution.py:should_stop_after_tool`).
 - Approval contract: planning can record pending approvals before execution; execution re-checks status/approval policy before handler call; context approval status is keyed by tool name and call id (`src/agents/tool_planning.py:build_tool_execution_plan`; `src/agents/tool_execution.py:_execute_tool_call_impl`; `src/agents/run_context.py:RunContextWrapper.approval_status_for`).
+- Edit approval contract: `PatchApprovalPolicy` allows `dry_run=True` validation and invalid patch text to reach the patch parser, but any valid `dry_run=False` patch requires approval before `create_apply_patch_tool` can call the write path (`src/agents/coding_policies.py:PatchApprovalPolicy.classify_patch_text`; `src/agents/edit_tools.py:create_apply_patch_tool`).
+
+## Tool Observation Contract
+
+- `ToolObservation` owns `tool_name`, `status`, `summary`, `details`, optional `output`, and `truncated`; `to_dict()` converts details to JSON-safe values (`src/agents/tool_observations.py:ToolObservation`; `src/agents/tool_observations.py:_json_safe`).
+- `to_text()` is the model-visible stable rendering and uses fixed headings: `Tool observation`, `tool`, `status`, `summary`, `details`, and `output` (`src/agents/tool_observations.py:ToolObservation.to_text`).
+- Command observations map `CommandResult.succeeded` to `ok` or `error`, include command/cwd/returncode/timed_out details, and combine stdout/stderr with labels (`src/agents/tool_observations.py:command_result_observation`; `src/agents/tool_observations.py:_command_output`).
+- Patch observations map `PatchResult.success` to `ok` or `error`, include dry-run, changed files, change count, and error count, and render changed paths/errors as output (`src/agents/tool_observations.py:patch_result_observation`; `src/agents/tool_observations.py:_patch_output`).
+- Truncation is explicit: adapters clip output before constructing the final observation or text, and `truncated=True` is part of the contract for downstream trajectory/eval readers (`src/agents/tool_observations.py:command_result_observation`; `src/agents/tool_observations.py:patch_result_observation`; `src/agents/tool_runtime.py:clip_tool_text`).
+
+## Coding Policy Contract
+
+- `SafetyDecision` is the shared policy result with `action` in `allow`, `approve`, or `block`; `requires_approval` is true for all non-allow decisions and `blocked` is true only for `block` (`src/agents/coding_policies.py:SafetyDecision`).
+- `ShellCommandPolicy.classify()` normalizes whitespace, blocks configured destructive fragments, allows known safe prefixes, requires approval for broad package/git prefixes, and requires approval for unknown commands (`src/agents/coding_policies.py:ShellCommandPolicy.classify`; `src/agents/coding_policies.py:_matches_prefix`).
+- `create_shell_command_tool()` checks blocked shell decisions inside the handler and raises `ToolExecutionError` before calling `Environment.run`; approval pauses still flow through `FunctionTool.needs_approval` when policy approval is enabled (`src/agents/shell_tools.py:create_shell_command_tool`; `src/agents/tool_runtime.py:requires_tool_approval`).
+- `PatchApprovalPolicy.classify_patch_text()` lets dry-run and invalid patch text proceed without approval, but actual valid writes return approval decisions, with delete/large/write categories for explanation (`src/agents/coding_policies.py:PatchApprovalPolicy.classify_patch_text`).
+- Policy classifications are explanatory, not sandboxing. Path safety still belongs to `Workspace` and write safety still depends on the patch tool validating paths before applying operations (`src/agents/workspace.py:Workspace.ensure_readable_path`; `src/agents/patches.py:validate_patch_paths`).
 
 ## Guardrail Contracts
 
@@ -68,6 +104,7 @@
 ## Workspace and Context Contracts
 
 - `Workspace.root` and `allowed_paths` are resolved in `__post_init__`; paths must remain under root (`src/agents/workspace.py:Workspace.__post_init__`; `src/agents/workspace.py:Workspace.resolve_path`).
+- `CONTEXT_WORKSPACE_MANIFEST_KEY` stores a `WorkspaceManifest` when one is provided; typed context accessors should be used instead of assuming raw context dict contents (`src/agents/run_context.py:CONTEXT_WORKSPACE_MANIFEST_KEY`; `src/agents/run_context.py:RunContextWrapper`).
 - `Workspace.ensure_readable_path` enforces root, allowed paths, and ignore patterns; all workspace readers/tools should use it (`src/agents/workspace.py:Workspace.ensure_readable_path`; `src/agents/workspace_tools.py:create_read_workspace_file_tool`; `src/agents/workspace_code.py:WorkspaceCodeReader.read_lines`).
 - `SelectedFilesState.add_file` deduplicates by normalized path and only promotes to editable, never downgrades editable to read-only (`src/agents/selected_files.py:SelectedFilesState.add_file`; `src/agents/selected_files.py:_normalize_selected_file_path`).
 - `RepoContextBuilder.build` section order is priority-based through `RepoContext.ordered_sections`; context truncation may remove sections but keeps selected paths and mentioned symbols (`src/agents/repo_context.py:RepoContextBuilder.build`; `src/agents/repo_context.py:RepoContext.ordered_sections`; `src/agents/repo_context.py:_limit_context`).

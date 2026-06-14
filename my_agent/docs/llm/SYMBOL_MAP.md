@@ -19,6 +19,33 @@
 | `execute_handoff` | function | `src/agents/run_steps.py` | Runs target agents via handoff tool calls. |
 | `build_run_result` | function | `src/agents/run_state.py` | Converts mutable `RunState` into frozen `RunResult`. |
 
+## Coding CLI Symbols
+
+| Symbol | File | Notes |
+|---|---|---|
+| `CodingCliConfig` | `src/agents/coding_cli.py` | Frozen snapshot of CLI task, workspace, profile, model, limits, and optional session path. |
+| `parse_coding_cli_args` | `src/agents/coding_cli.py` | Converts `argparse` values into `CodingCliConfig` and validates profile/positive limits. |
+| `build_coding_cli_setup` | `src/agents/coding_cli.py` | Converts config into `CodingAgentSetup` by selecting a profile, model, `WorkspaceManifest`, and optional `JsonSession`. |
+| `run_coding_agent_cli` | `src/agents/coding_cli.py` | Runs one local coding task, optionally writes trajectory JSONL, and maps final output, pending approvals, and errors to process exit codes. |
+| `build_example_command` | `examples/local_coding_cli.py` | Builds the recommended `python -m agents.coding_cli` command without calling a real model. |
+
+## Scheme A Coding-Agent Symbols
+
+| Symbol | File | Notes |
+|---|---|---|
+| `WorkspaceManifest` | `src/agents/workspace_manifest.py` | User-facing workspace/test-command/env policy that builds runtime `Workspace` objects and exposes JSON-safe metadata. |
+| `CONTEXT_WORKSPACE_MANIFEST_KEY` | `src/agents/run_context.py` | Context key used by `build_coding_agent` to store the manifest alongside workspace and selected files. |
+| `ToolObservation` | `src/agents/tool_observations.py` | Frozen structured observation with stable text and JSON-safe dict rendering. |
+| `command_result_observation` | `src/agents/tool_observations.py` | Maps `CommandResult` into status/summary/details/output for shell and test tools. |
+| `patch_result_observation` | `src/agents/tool_observations.py` | Maps `PatchResult` into dry-run/change/error observation details for the patch tool. |
+| `SafetyDecision` | `src/agents/coding_policies.py` | `allow`/`approve`/`block` decision object shared by shell and patch policies. |
+| `ShellCommandPolicy` | `src/agents/coding_policies.py` | Classifies shell commands by safe prefixes, approval prefixes, blocked fragments, and unknown commands. |
+| `PatchApprovalPolicy` | `src/agents/coding_policies.py` | Allows dry-run validation and requires approval for valid write patches, with delete/large/write categories. |
+| `TrajectoryEvent` | `src/agents/trajectory.py` | JSONL event shape for run evidence: event type, run id, step, payload, timestamp. |
+| `trajectory_events_from_result` | `src/agents/trajectory.py` | Converts a `RunResult` plus task/workspace metadata into ordered trajectory events. |
+| `write_trajectory_jsonl` | `src/agents/trajectory.py` | Writes trajectory events as one JSON object per line, creating parent directories. |
+| `pending_approval_summaries` | `src/agents/result.py` | User-facing summary strings for pending approvals, used by the CLI print path. |
+
 ## State and Data Contracts
 
 | Symbol | File | Owned data | Producers | Consumers |
@@ -34,6 +61,7 @@
 | `RunState` | `src/agents/run_state.py` | mutable in-run items, limits, final answer, context, approvals, guardrail results | run loop | all run subsystems |
 | `RunStateSnapshot` | `src/agents/run_state.py` | serializable run continuation data | `RunResult.to_state` | `RunState.from_snapshot` |
 | `RunResult` | `src/agents/result.py` | frozen final run output, items, raw responses, context | `build_run_result` | users, chat, sessions, resume |
+| `TrajectoryEvent` | `src/agents/trajectory.py` | JSONL audit event generated from run history | `trajectory_events_from_result` | CLI trajectory writer, eval/debug readers |
 
 ## Tool Symbols
 
@@ -51,6 +79,7 @@
 | `record_tool_approval_required` | `src/agents/tool_execution.py` | Runtime approval request recorder for execution-time approvals. |
 | `record_tool_approval_rejected` | `src/agents/tool_execution.py` | Converts rejected approval into model-visible failed observation. |
 | `resume_pending_tool_approvals` | `src/agents/run_resume.py` | Executes approved/rejected pending calls and leaves remaining calls pending. |
+| `ToolObservation` | `src/agents/tool_observations.py` | Stable shell/test/patch observation contract for text and dict rendering. |
 
 ## Model and Output Symbols
 
@@ -86,6 +115,7 @@
 | Symbol | File | Notes |
 |---|---|---|
 | `Workspace` | `src/agents/workspace.py` | Root/allowed/ignored path policy. |
+| `WorkspaceManifest` | `src/agents/workspace_manifest.py` | Serializable local coding workspace policy and test-command defaults. |
 | `WorkspacePathError` | `src/agents/workspace.py` | Raised for outside root, outside allowed paths, ignored paths, not file/dir. |
 | `WorkspaceFileEntry` | `src/agents/workspace_inventory.py` | Inventory entry with readable/ignored reason. |
 | `WorkspaceInventory` | `src/agents/workspace_inventory.py` | Inventory result with truncation flag. |
@@ -112,6 +142,9 @@
 | `ToolInputGuardrail` | `src/agents/tool_guardrails.py` | Tool-call pre-execution guardrail wrapper. |
 | `ToolOutputGuardrail` | `src/agents/tool_guardrails.py` | Tool-output post-execution guardrail wrapper. |
 | `ToolGuardrailFunctionOutput` | `src/agents/tool_guardrails.py` | `allow`, `reject_content`, `raise_exception` behavior contract. |
+| `SafetyDecision` | `src/agents/coding_policies.py` | Policy result for shell/edit classification. |
+| `ShellCommandPolicy` | `src/agents/coding_policies.py` | Shell allow/approve/block classifier used by coding-agent shell tools. |
+| `PatchApprovalPolicy` | `src/agents/coding_policies.py` | Patch write approval classifier used by apply-patch tools. |
 | `VerificationPolicy` | `src/agents/verification.py` | Commands, trigger tools, attempts, output limits. |
 | `VerificationRunner` | `src/agents/verification.py` | Runs verification policy through `Environment`. |
 | `LifecycleHooks` | `src/agents/lifecycle.py` | User callbacks for agent/model/tool/handoff/error events. |
@@ -127,10 +160,11 @@
 | Area | Tests |
 |---|---|
 | Public API | `tests/test_public_api.py`, `tests/test_agent_config.py` |
+| Coding CLI / Scheme A setup | `tests/test_coding_cli.py`, `tests/test_workspace_manifest.py`, `tests/test_coding_agent_profile.py` |
 | Run loop | `tests/test_runner.py`, `tests/test_run_steps.py`, `tests/test_run_state.py` |
 | Model/OpenAI adapter | `tests/test_models.py`, `tests/test_output.py`, `tests/test_code_execution.py` |
-| Tools/approvals | `tests/test_tools.py`, `tests/test_tool_execution_plan.py`, `tests/test_tool_approval_runtime.py`, `tests/test_tool_approval_pause.py` |
+| Tools/approvals | `tests/test_tools.py`, `tests/test_tool_execution_plan.py`, `tests/test_tool_approval_runtime.py`, `tests/test_tool_approval_pause.py`, `tests/test_coding_policies.py`, `tests/test_tool_observations.py` |
 | Guardrails | `tests/test_guardrails.py`, `tests/test_tool_guardrails.py` |
 | Workspace/context | `tests/test_workspace.py`, `tests/test_workspace_tools.py`, `tests/test_workspace_inventory.py`, `tests/test_workspace_code.py`, `tests/test_workspace_code_tools.py`, `tests/test_context_mentions.py`, `tests/test_selected_files.py`, `tests/test_repo_context.py`, `tests/test_context_chunks.py` |
 | Memory/session/chat | `tests/test_memory.py`, `tests/test_session_memory_example.py`, `tests/test_chat.py` |
-| Observability/verification | `tests/test_tracing.py`, `tests/test_lifecycle.py`, `tests/test_verification.py`, `tests/test_verification_loop.py` |
+| Observability/verification | `tests/test_tracing.py`, `tests/test_lifecycle.py`, `tests/test_verification.py`, `tests/test_verification_loop.py`, `tests/test_trajectory.py` |

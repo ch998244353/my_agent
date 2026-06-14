@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from .tool_runtime import clip_tool_text
+from .tool_observations import command_result_observation
 from .workspace import Workspace
 
 
@@ -21,6 +21,7 @@ def _text_or_empty(output: str | bytes | None) -> str:
     return output
 
 
+# 命令执行结果对象 
 @dataclass(frozen=True)
 class CommandResult:
     command: str
@@ -54,20 +55,11 @@ class CommandResult:
         }
 
     def to_observation(self, max_chars: int | None = None) -> str:
-        return "\n".join(
-            [
-                "Command observation",
-                f"status: {self._status()}",
-                f"command: {self.command}",
-                f"cwd: {self.cwd}",
-                f"returncode: {self.returncode}",
-                f"timed_out: {str(self.timed_out).lower()}",
-                "stdout:",
-                clip_tool_text(self.stdout, max_chars),
-                "stderr:",
-                clip_tool_text(self.stderr, max_chars),
-            ]
-        )
+        return command_result_observation(
+            "command",
+            self,
+            max_chars=max_chars,
+        ).to_text()
 
     def _status(self) -> str:
         if self.timed_out:
@@ -90,6 +82,7 @@ class Environment(Protocol):
         ...
 
 
+# 当前本地环境实现，用 subprocess.run 在本机执行 shell 命令
 @dataclass(frozen=True)
 class LocalEnvironment:
     cwd: str | Path = "."

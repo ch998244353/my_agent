@@ -4,7 +4,7 @@
 
 - Purpose: define the public import surface and create configured `Agent` objects for direct, chat, mini-code, and coding-agent workflows (`src/agents/__init__.py:__all__`; `src/agents/agent.py:Agent`; `src/agents/coding_agent.py:build_coding_agent`; `src/agents/chat_runtime.py:build_chat_runtime`).
 - Owned files: `src/agents/__init__.py`, `src/agents/agent.py`, `src/agents/agents.py`, `src/agents/coding_agent.py`, `src/agents/chat_runtime.py`.
-- Public surface: `Agent`, `AgentCapabilities`, `Agent.as_tool`, `Agent.for_code`, `build_coding_agent`, `CodingAgentProfile`, `ChatRuntimeConfig`, `ChatRuntime` (`src/agents/agent.py:AgentCapabilities`; `src/agents/agent.py:Agent.as_tool`; `src/agents/coding_agent.py:CodingAgentProfile`; `src/agents/chat_runtime.py:ChatRuntimeConfig`).
+- Public surface: `Agent`, `AgentCapabilities`, `Agent.as_tool`, `Agent.for_code`, `build_coding_agent`, `CodingAgentProfile`, `WorkspaceManifest`, `ToolObservation`, coding policy classes, trajectory helpers, `ChatRuntimeConfig`, `ChatRuntime` (`src/agents/agent.py:AgentCapabilities`; `src/agents/agent.py:Agent.as_tool`; `src/agents/coding_agent.py:CodingAgentProfile`; `src/agents/workspace_manifest.py:WorkspaceManifest`; `src/agents/tool_observations.py:ToolObservation`; `src/agents/chat_runtime.py:ChatRuntimeConfig`).
 - Depends on: memory, model settings, output schema, tools, handoffs, guardrails, run config, workspace, environment (`src/agents/agent.py:Agent.__post_init__`; `src/agents/coding_agent.py:_register_capability_tools`).
 - Called by: examples, chat CLI/runtime, tests, and user code through package root (`src/agents/chat_cli.py:main`; `examples/coding_agent_profile.py`; `tests/test_public_api.py`).
 - State: `Agent` owns mutable `memory` and `tool_registry`; `CodingAgentSetup` carries `agent`, `run_config`, `workspace`, `environment` (`src/agents/agent.py:Agent`; `src/agents/coding_agent.py:CodingAgentSetup`).
@@ -12,6 +12,58 @@
 - Common edit reasons: new capability pack, new default tool, new public export, new model/output config (`src/agents/coding_agent.py:DEFAULT_CAPABILITY_PACKS`; `src/agents/__init__.py:__all__`).
 - Risks: `Agent.clone` shallow-copies list fields but shares memory/model/tool registry unless overridden; changing public exports needs tests (`src/agents/agent.py:Agent.clone`; `tests/test_public_api.py`).
 - Evidence: `src/agents/agent.py:Agent`, `src/agents/coding_agent.py:build_coding_agent`, `src/agents/__init__.py:__all__`.
+
+## Coding CLI Entrypoint
+
+- Purpose: bind local CLI arguments to `CodingAgentSetup`, run one coding task, print a concise result, and return shell-friendly exit codes (`src/agents/coding_cli.py:run_coding_agent_cli`; `src/agents/coding_cli.py:_exit_code_for_result`).
+- Owned files: `src/agents/coding_cli.py`, `examples/local_coding_cli.py`, `tests/test_coding_cli.py`.
+- Public surface: `CodingCliConfig`, `parse_coding_cli_args`, `build_coding_cli_setup`, `run_coding_agent_cli` through package root lazy exports; config includes workspace/profile/model limits, `--session-json`, `--trajectory-jsonl`, and test-command defaults (`src/agents/coding_cli.py:CodingCliConfig`; `src/agents/__init__.py:__getattr__`).
+- Depends on: `build_coding_agent`, `CodingAgentProfile`, `WorkspaceManifest`, `OpenAIResponsesModel`, `JsonSession`, trajectory helpers, and `Agent.run` (`src/agents/coding_agent.py:build_coding_agent`; `src/agents/workspace_manifest.py:WorkspaceManifest`; `src/agents/trajectory.py:write_trajectory_jsonl`; `src/agents/agent.py:Agent.run`).
+- Called by: `python -m agents.coding_cli`, package-root imports, and the local smoke example (`src/agents/coding_cli.py:main`; `examples/local_coding_cli.py:build_example_command`).
+- State: no persistent process state of its own; it may pass `JsonSession` into `RunConfig.session` and writes a trajectory file only when `--trajectory-jsonl` is provided (`src/agents/coding_cli.py:build_coding_cli_setup`; `src/agents/coding_cli.py:_write_trajectory_from_result`; `src/agents/memory.py:JsonSession`).
+- Contracts: exit code `0` means final output, `1` means error or stopped without output, and `2` means pending approval (`src/agents/coding_cli.py:_exit_code_for_result`; `src/agents/result.py:RunResultBase.pending_approval_summaries`).
+- Common edit reasons: new CLI flags, profile selection, result printing, package-root export behavior, or module smoke testing (`src/agents/coding_cli.py:_build_parser`; `tests/test_coding_cli.py`).
+- Risks: package-root eager imports of `agents.coding_cli` create `python -m agents.coding_cli` runpy warnings, so exports are lazy through `__getattr__` (`src/agents/__init__.py:__getattr__`).
+- Evidence: `tests/test_coding_cli.py`, `tests/test_public_api.py`.
+
+## Workspace Manifest and Coding Policies
+
+- Purpose: make local coding workspace and safety policy explicit before tools execute (`src/agents/workspace_manifest.py:WorkspaceManifest`; `src/agents/coding_policies.py:ShellCommandPolicy`; `src/agents/coding_policies.py:PatchApprovalPolicy`).
+- Owned files: `src/agents/workspace_manifest.py`, `src/agents/coding_policies.py`, plus wiring in `src/agents/coding_agent.py`, `src/agents/coding_cli.py`, `src/agents/shell_tools.py`, and `src/agents/edit_tools.py`.
+- Public surface: `WorkspaceManifest`, `SafetyDecision`, `ShellCommandPolicy`, `PatchApprovalPolicy` (`src/agents/workspace_manifest.py:WorkspaceManifest`; `src/agents/coding_policies.py:SafetyDecision`).
+- Depends on: `Workspace` for path safety, patch parsing for edit classification, and `FunctionTool.needs_approval` callables for pause decisions (`src/agents/workspace.py:Workspace`; `src/agents/patches.py:parse_patch`; `src/agents/tool_runtime.py:requires_tool_approval`).
+- Called by: `build_coding_agent`, CLI setup, shell command tools, and patch tools (`src/agents/coding_agent.py:build_coding_agent`; `src/agents/coding_cli.py:build_coding_cli_setup`; `src/agents/shell_tools.py:create_shell_command_tool`; `src/agents/edit_tools.py:create_apply_patch_tool`).
+- State: immutable dataclasses only; manifest stores user-facing root/path/test-command/env policy and builds runtime `Workspace` objects on demand (`src/agents/workspace_manifest.py:WorkspaceManifest.build_workspace`).
+- Contracts: manifest metadata is JSON-safe, `allowed_test_commands` includes the default test command, shell policy returns allow/approve/block, and write patches require approval while dry-run patches can validate without pausing (`src/agents/workspace_manifest.py:WorkspaceManifest.metadata`; `src/agents/coding_policies.py:ShellCommandPolicy.classify`; `src/agents/coding_policies.py:PatchApprovalPolicy.classify_patch_text`).
+- Common edit reasons: add manifest fields, change test command defaults, alter shell safety prefixes, or tune patch approval thresholds (`tests/test_workspace_manifest.py`; `tests/test_coding_policies.py`).
+- Risks: shell classification is conservative string/prefix matching rather than a shell AST; blocked fragments must stay synchronized with Windows and POSIX destructive patterns (`src/agents/coding_policies.py:ShellCommandPolicy.blocked_fragments`).
+- Evidence: `tests/test_workspace_manifest.py`, `tests/test_coding_policies.py`, `tests/test_coding_agent_profile.py`, `tests/test_shell_tools.py`, `tests/test_edit_tools.py`.
+
+## Tool Observation Rendering
+
+- Purpose: standardize model-visible shell/test/patch results as structured observations with stable text rendering (`src/agents/tool_observations.py:ToolObservation`; `src/agents/tool_observations.py:command_result_observation`; `src/agents/tool_observations.py:patch_result_observation`).
+- Owned files: `src/agents/tool_observations.py`; integrations live in `src/agents/environment.py`, `src/agents/shell_tools.py`, and `src/agents/edit_tools.py`.
+- Public surface: `ToolObservation`, `command_result_observation`, `patch_result_observation` (`src/agents/tool_observations.py:__all__`).
+- Depends on: `CommandResult`, `PatchResult`, and `clip_tool_text` (`src/agents/environment.py:CommandResult`; `src/agents/patches.py:PatchResult`; `src/agents/tool_runtime.py:clip_tool_text`).
+- Called by: `CommandResult.to_observation`, shell/test command tools, and apply-patch tool (`src/agents/environment.py:CommandResult.to_observation`; `src/agents/shell_tools.py:create_shell_command_tool`; `src/agents/edit_tools.py:create_apply_patch_tool`).
+- State: no mutable state; observations are frozen dataclasses and render to JSON-safe dicts or stable text blocks (`src/agents/tool_observations.py:ToolObservation.to_dict`; `src/agents/tool_observations.py:ToolObservation.to_text`).
+- Contracts: text starts with `Tool observation`, includes `tool`, `status`, `summary`, `details`, and `output`, and can mark truncation when output is clipped (`src/agents/tool_observations.py:ToolObservation.to_text`).
+- Common edit reasons: add observation fields, change max-output behavior, or map new tool result types into trajectory-friendly details (`tests/test_tool_observations.py`; `tests/test_shell_tools.py`; `tests/test_edit_tools.py`).
+- Risks: trajectory or model memory may persist command output; callers must still treat observations as potentially sensitive run evidence (`src/agents/tool_observations.py:_command_output`; `src/agents/trajectory.py:_normalize_trajectory_payload`).
+- Evidence: `tests/test_tool_observations.py`, `tests/test_environment.py`, `tests/test_shell_tools.py`, `tests/test_edit_tools.py`.
+
+## Trajectory JSONL Evidence
+
+- Purpose: convert a completed or paused `RunResult` into a plain JSONL audit file for debugging, teaching, and future eval stages (`src/agents/trajectory.py:trajectory_events_from_result`; `src/agents/trajectory.py:write_trajectory_jsonl`).
+- Owned files: `src/agents/trajectory.py`, `tests/test_trajectory.py`; CLI integration lives in `src/agents/coding_cli.py`.
+- Public surface: `TrajectoryEvent`, `trajectory_events_from_result`, and `write_trajectory_jsonl` are exported from the package root (`src/agents/trajectory.py:TrajectoryEvent`; `src/agents/__init__.py:__all__`).
+- Depends on: `RunResult`, `RunItem`, dataclass/path/exception normalization, and explicit CLI metadata (`src/agents/result.py:RunResult`; `src/agents/contracts.py:RunItem`; `src/agents/trajectory.py:_normalize_trajectory_payload`).
+- Called by: `python -m agents.coding_cli --trajectory-jsonl ...` and any direct user code that wants run evidence without enabling tracing (`src/agents/coding_cli.py:_write_trajectory_from_result`).
+- State: no mutable runtime state; writer creates or appends to the target JSONL file only when called (`src/agents/trajectory.py:write_trajectory_jsonl`).
+- Contracts: trajectory is separate from tracing; it records supported runtime evidence, derives approval rejection from metadata, and preserves unknown run items as `runtime_item` (`src/agents/trajectory.py:_event_type_from_run_item`; `src/agents/trajectory.py:_event_from_run_item`).
+- Common edit reasons: new `RunItem.item_type` values, new summary fields, or later inspector/eval readers (`src/agents/contracts.py:RunItem`; `src/agents/trajectory.py:_result_summary_payload`).
+- Risks: payloads are normalized for JSON safety, but business-sensitive tool outputs may still appear because trajectory is user-facing run evidence; callers should choose file location accordingly (`src/agents/trajectory.py:_normalize_trajectory_payload`).
+- Evidence: `tests/test_trajectory.py`, `tests/test_coding_cli.py`, `tests/test_public_api.py`.
 
 ## Chat Runtime and CLI
 
@@ -81,8 +133,8 @@
 ## Workspace, Selected Files, and Repo Context
 
 - Purpose: provide bounded file access and assemble model-visible repository context from workspace inventory, file mentions, selected files, and code search (`src/agents/workspace.py:Workspace`; `src/agents/repo_context.py:build_task_repo_context`; `src/agents/context_chunks.py:build_turn_context`).
-- Owned files: `src/agents/workspace.py`, `src/agents/workspace_tools.py`, `src/agents/workspace_inventory.py`, `src/agents/workspace_code.py`, `src/agents/workspace_code_tools.py`, `src/agents/context_mentions.py`, `src/agents/selected_files.py`, `src/agents/repo_context.py`, `src/agents/context_chunks.py`.
-- Public surface: `Workspace`, `WorkspaceFileEntry`, `WorkspaceInventory`, `WorkspaceCodeReader`, `SelectedFile`, `SelectedFilesState`, `RepoContext`, `RepoContextBuilder`, readonly workspace tools (`src/agents/workspace.py:Workspace`; `src/agents/workspace_code.py:WorkspaceCodeReader`; `src/agents/selected_files.py:SelectedFilesState`; `src/agents/repo_context.py:RepoContextBuilder`).
+- Owned files: `src/agents/workspace.py`, `src/agents/workspace_manifest.py`, `src/agents/workspace_tools.py`, `src/agents/workspace_inventory.py`, `src/agents/workspace_code.py`, `src/agents/workspace_code_tools.py`, `src/agents/context_mentions.py`, `src/agents/selected_files.py`, `src/agents/repo_context.py`, `src/agents/context_chunks.py`.
+- Public surface: `Workspace`, `WorkspaceManifest`, `WorkspaceFileEntry`, `WorkspaceInventory`, `WorkspaceCodeReader`, `SelectedFile`, `SelectedFilesState`, `RepoContext`, `RepoContextBuilder`, readonly workspace tools (`src/agents/workspace.py:Workspace`; `src/agents/workspace_manifest.py:WorkspaceManifest`; `src/agents/workspace_code.py:WorkspaceCodeReader`; `src/agents/selected_files.py:SelectedFilesState`; `src/agents/repo_context.py:RepoContextBuilder`).
 - Depends on: filesystem, AST for Python outlines, workspace policy, run context keys (`src/agents/workspace_code.py:WorkspaceCodeReader.outline_file`; `src/agents/run_context.py:CONTEXT_WORKSPACE_KEY`).
 - Called by: coding-agent builder, run loop before first model turn, model context construction, workspace tools (`src/agents/coding_agent.py:build_coding_agent`; `src/agents/run_loop.py:_run_agent_loop_impl`; `src/agents/workspace_tools.py:create_readonly_workspace_tools`).
 - State: `SelectedFilesState` mutates in place inside `RunConfig.context`; `RepoContext` is written back to `context_wrapper.context[CONTEXT_REPO_CONTEXT_KEY]` (`src/agents/selected_files.py:SelectedFilesState.add_file`; `src/agents/repo_context.py:build_task_repo_context`).
@@ -95,11 +147,11 @@
 
 - Purpose: expose environment commands, test commands, file patching, and code-reading/search tools as `FunctionTool` objects (`src/agents/shell_tools.py:create_shell_command_tool`; `src/agents/edit_tools.py:create_apply_patch_tool`; `src/agents/workspace_code_tools.py:create_workspace_code_tools`).
 - Owned files: `src/agents/environment.py`, `src/agents/shell_tools.py`, `src/agents/edit_tools.py`, `src/agents/patches.py`, `src/agents/workspace_code_tools.py`.
-- Public surface: `Environment`, `LocalEnvironment`, `CommandResult`, `create_shell_command_tool`, `create_test_command_tool`, `create_apply_patch_tool`, patch dataclasses (`src/agents/environment.py:Environment`; `src/agents/environment.py:LocalEnvironment`; `src/agents/patches.py:PatchResult`).
-- Depends on: `Workspace` for cwd/path bounds, `ToolApproval`, `FunctionTool`, subprocess, patch parser (`src/agents/environment.py:LocalEnvironment._resolve_cwd`; `src/agents/patches.py:parse_patch`).
+- Public surface: `Environment`, `LocalEnvironment`, `CommandResult`, `create_shell_command_tool`, `create_test_command_tool`, `create_apply_patch_tool`, `ToolObservation`, patch dataclasses (`src/agents/environment.py:Environment`; `src/agents/environment.py:LocalEnvironment`; `src/agents/tool_observations.py:ToolObservation`; `src/agents/patches.py:PatchResult`).
+- Depends on: `Workspace` for cwd/path bounds, `ToolApproval`, `FunctionTool`, `ShellCommandPolicy`, `PatchApprovalPolicy`, structured observation helpers, subprocess, patch parser (`src/agents/environment.py:LocalEnvironment._resolve_cwd`; `src/agents/coding_policies.py:ShellCommandPolicy`; `src/agents/coding_policies.py:PatchApprovalPolicy`; `src/agents/tool_observations.py:command_result_observation`; `src/agents/patches.py:parse_patch`).
 - Called by: coding-agent capability packs and direct examples (`src/agents/coding_agent.py:_register_shell_tools`; `src/agents/coding_agent.py:_register_edit_tools`; `examples/shell_and_test_tools_agent.py`).
 - State: shell tools do not mutate Python state except via environment side effects; patch tool writes/deletes files when `dry_run=False` (`src/agents/environment.py:LocalEnvironment.run`; `src/agents/patches.py:apply_patch`).
-- Contracts: test commands are allowlisted; patch paths cannot be absolute and must pass `Workspace.ensure_readable_path` (`src/agents/shell_tools.py:create_test_command_tool`; `src/agents/patches.py:validate_patch_paths`).
+- Contracts: test commands are allowlisted; patch paths cannot be absolute and must pass `Workspace.ensure_readable_path`; dry-run patch validation may run without approval, but actual patch writes are approval-gated before the patch handler writes files (`src/agents/shell_tools.py:create_test_command_tool`; `src/agents/patches.py:validate_patch_paths`; `src/agents/coding_policies.py:PatchApprovalPolicy`).
 - Common edit reasons: command allowlist semantics, patch format, workspace read tool signatures (`src/agents/shell_tools.py:DEFAULT_TEST_COMMAND`; `src/agents/workspace_code_tools.py:create_search_workspace_code_tool`).
 - Risks: `LocalEnvironment.run` uses `shell=True`; patch hunk matching is text-based and first-match only (`src/agents/environment.py:LocalEnvironment.run`; `src/agents/patches.py:_apply_update_content`).
 - Evidence: `tests/test_shell_tools.py`, `tests/test_edit_tools.py`, `tests/test_patches.py`, `tests/test_workspace_code_tools.py`.

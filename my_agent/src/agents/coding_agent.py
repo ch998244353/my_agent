@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from .agent import Agent
+from .coding_policies import PatchApprovalPolicy, ShellCommandPolicy
 from .edit_tools import create_apply_patch_tool
 from .environment import Environment, LocalEnvironment
 from .memory import AgentMemory
@@ -14,11 +15,17 @@ from .run_config import RunConfig
 from .run_context import (
     CONTEXT_ENVIRONMENT_KEY,
     CONTEXT_SELECTED_FILES_KEY,
+    CONTEXT_WORKSPACE_MANIFEST_KEY,
     CONTEXT_WORKSPACE_KEY,
 )
 from .selected_files import SelectedFilesState
-from .shell_tools import create_shell_command_tool, create_test_command_tool
+from .shell_tools import (
+    DEFAULT_TEST_COMMAND,
+    create_shell_command_tool,
+    create_test_command_tool,
+)
 from .workspace import Workspace
+from .workspace_manifest import WorkspaceManifest
 from .workspace_tools import create_readonly_workspace_tools
 
 
@@ -59,6 +66,7 @@ class CapabilityPack:
     register: CapabilityRegistrar | None = None
 
 
+# 集中承载 coding agent 的名称、系统提示词、安全开关、审批策略和运行步数限制 稳定 agent 默认行为。
 @dataclass(frozen=True)
 class CodingAgentProfile:
     name: str = "CodingAgent"
@@ -68,6 +76,8 @@ class CodingAgentProfile:
     enable_edit: bool = False
     require_approval_for_shell: bool = True
     require_approval_for_edit: bool = True
+    shell_command_policy: ShellCommandPolicy = field(default_factory=ShellCommandPolicy)
+    patch_approval_policy: PatchApprovalPolicy = field(default_factory=PatchApprovalPolicy)
     max_turns: int = 12
     max_steps: int = 20
 
@@ -136,6 +146,7 @@ def _append_unique_capability(
         capabilities.append(capability)
 
 
+# 作为 coding agent 的统一返回对象,把 agent、run_config、workspace、environment 放在一起，避免调用方手动拼接
 @dataclass(frozen=True)
 class CodingAgentSetup:
     agent: Agent
@@ -150,8 +161,9 @@ def _register_workspace_read_tools(
     workspace: Workspace,
     environment: Environment | None,
     profile: CodingAgentProfile,
+    manifest: WorkspaceManifest | None = None,
 ) -> None:
-    _ = environment, profile
+    _ = environment, profile, manifest
     for tool in create_readonly_workspace_tools(workspace):
         agent.tool_registry.register(tool)
 
@@ -162,12 +174,14 @@ def _register_shell_tools(
     workspace: Workspace,
     environment: Environment | None,
     profile: CodingAgentProfile,
+    manifest: WorkspaceManifest | None = None,
 ) -> None:
-    _ = workspace
+    _ = workspace, manifest
     agent.tool_registry.register(
         create_shell_command_tool(
             _require_environment(environment, CodingCapability.SHELL),
             needs_approval=profile.require_approval_for_shell,
+            command_policy=profile.shell_command_policy,
         )
     )
 
@@ -178,12 +192,20 @@ def _register_test_tools(
     workspace: Workspace,
     environment: Environment | None,
     profile: CodingAgentProfile,
+    manifest: WorkspaceManifest | None = None,
 ) -> None:
     _ = workspace
+    default_command = None
+    allowed_commands = None
+    if manifest is not None:
+        default_command = manifest.default_test_command
+        allowed_commands = manifest.allowed_test_commands
     agent.tool_registry.register(
         create_test_command_tool(
             _require_environment(environment, CodingCapability.TEST),
-            needs_approval=profile.require_approval_for_shell,
+            default_command=default_command or DEFAULT_TEST_COMMAND,
+            allowed_commands=allowed_commands,
+            needs_approval=False,
         )
     )
 
@@ -194,12 +216,14 @@ def _register_edit_tools(
     workspace: Workspace,
     environment: Environment | None,
     profile: CodingAgentProfile,
+    manifest: WorkspaceManifest | None = None,
 ) -> None:
-    _ = environment
+    _ = environment, manifest
     agent.tool_registry.register(
         create_apply_patch_tool(
             workspace,
             needs_approval=profile.require_approval_for_edit,
+            patch_policy=profile.patch_approval_policy,
         )
     )
 
@@ -267,6 +291,31 @@ def _require_environment(
     return environment
 
 
+def _resolve_workspace(
+    workspace: Workspace | str | Path | None,
+    manifest: WorkspaceManifest | None,
+) -> Workspace:
+    if manifest is None:
+        workspace_value = "." if workspace is None else workspace
+        return (
+            workspace_value
+            if isinstance(workspace_value, Workspace)
+            else Workspace(workspace_value)
+        )
+
+    manifest_workspace = manifest.build_workspace()
+    if workspace is None:
+        return manifest_workspace
+
+    supplied_workspace = (
+        workspace if isinstance(workspace, Workspace) else Workspace(workspace)
+    )
+    if supplied_workspace.root != manifest_workspace.root:
+        raise ValueError("workspace root does not match manifest root")
+    return manifest_workspace
+
+
+# capability 分发入口
 def _register_capability_tools(
     *,
     agent: Agent,
@@ -274,6 +323,7 @@ def _register_capability_tools(
     environment: Environment | None,
     profile: CodingAgentProfile,
     capability: CodingCapability,
+    manifest: WorkspaceManifest | None,
 ) -> None:
     pack = _capability_pack_for(capability)
     if pack.register is None:
@@ -283,24 +333,29 @@ def _register_capability_tools(
         workspace=workspace,
         environment=environment,
         profile=profile,
+        manifest=manifest,
     )
 
 
 def build_coding_agent(
     *,
     model: Any,
-    workspace: Workspace | str | Path = ".",
+    workspace: Workspace | str | Path | None = None,
+    manifest: WorkspaceManifest | None = None,
     profile: CodingAgentProfile | None = None,
     memory: AgentMemory | None = None,
     environment: Environment | None = None,
 ) -> CodingAgentSetup:
     resolved_profile = profile or CodingAgentProfile()
-    resolved_workspace = workspace if isinstance(workspace, Workspace) else Workspace(workspace)
+    resolved_workspace = _resolve_workspace(workspace, manifest)
     resolved_memory = memory or AgentMemory()
     resolved_environment = environment
     resolved_capabilities = resolved_profile.resolved_capabilities()
     if _requires_environment(resolved_capabilities) and resolved_environment is None:
-        resolved_environment = LocalEnvironment(workspace=resolved_workspace)
+        resolved_environment = LocalEnvironment(
+            workspace=resolved_workspace,
+            env=manifest.env if manifest is not None else None,
+        )
 
     agent = Agent(
         memory=resolved_memory,
@@ -316,18 +371,27 @@ def build_coding_agent(
             environment=resolved_environment,
             profile=resolved_profile,
             capability=capability,
+            manifest=manifest,
         )
 
     context: dict[str, object] = {
         CONTEXT_WORKSPACE_KEY: resolved_workspace,
         CONTEXT_SELECTED_FILES_KEY: SelectedFilesState(),
     }
+    if manifest is not None:
+        context[CONTEXT_WORKSPACE_MANIFEST_KEY] = manifest
     if resolved_environment is not None:
         context[CONTEXT_ENVIRONMENT_KEY] = resolved_environment
 
+    metadata: dict[str, object] = {
+        "context_summary": _context_summary(resolved_workspace, resolved_environment)
+    }
+    if manifest is not None:
+        metadata["workspace_manifest"] = manifest.metadata()
+
     run_config = RunConfig(
         context=context,
-        metadata={"context_summary": _context_summary(resolved_workspace, resolved_environment)},
+        metadata=metadata,
         max_turns=resolved_profile.max_turns,
         max_steps=resolved_profile.max_steps,
     )

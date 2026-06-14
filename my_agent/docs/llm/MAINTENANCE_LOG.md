@@ -35,3 +35,45 @@ When production code, public exports, runtime flow, state contracts, tool behavi
 - Handoff propagation of parent `RunConfig`, context, sessions, and tracing metadata is UNKNOWN because `target_agent.run(task)` is called without config (`src/agents/run_steps.py:_execute_handoff_impl`).
 - Hook exception behavior is NEEDS_VERIFICATION; lifecycle emitters do not catch exceptions in inspected code (`src/agents/lifecycle.py:emit_error`).
 - Some source comments are mojibake/Chinese-encoded; architecture docs rely on code symbols and behavior, not comment text.
+
+## Coding CLI Entrypoint - 2026-06-12T22:25:00+08:00
+
+- Production code edits: added a local coding CLI module entrypoint, lazy package-root exports for coding CLI symbols, and a smoke example command builder (`src/agents/coding_cli.py`; `src/agents/__init__.py`; `examples/local_coding_cli.py`).
+- Documentation updates: registered the coding CLI in `ARCHITECTURE_INDEX.md`, `MODULE_CARDS.md`, and `SYMBOL_MAP.md`.
+- Verification: `python -m pytest tests/test_coding_cli.py -v` passed 17 tests; `python -m pytest tests/test_coding_agent_profile.py tests/test_public_api.py -v` passed 30 tests and 255 subtests on Windows/Python 3.14.2.
+- Known follow-up: no console script is defined in `pyproject.toml`; the supported entry remains `python -m agents.coding_cli`.
+
+## PLAN02 Workspace Manifest - 2026-06-14T20:10:00+08:00
+
+- Production code edits: added `WorkspaceManifest`, manifest-aware `build_coding_agent` setup, manifest metadata, and CLI construction from workspace/test command arguments (`src/agents/workspace_manifest.py`; `src/agents/coding_agent.py`; `src/agents/coding_cli.py`).
+- Documentation updates: documented manifest ownership through the coding-agent setup, run context key, and workspace/test command contracts (`docs/llm/MODULE_CARDS.md`; `docs/llm/STATE_AND_CONTRACTS.md`; `docs/llm/SYMBOL_MAP.md`).
+- Verification: run `python -m pytest tests/test_workspace_manifest.py tests/test_coding_agent_profile.py tests/test_coding_cli.py -v` after changing manifest behavior.
+
+## PLAN03 Structured Tool Observations - 2026-06-14T20:15:00+08:00
+
+- Production code edits: added stable `ToolObservation` rendering for shell/test command results and patch results, including status, summary, details, output, changed files, errors, and truncation metadata (`src/agents/tool_observations.py`; `src/agents/shell_tools.py`; `src/agents/edit_tools.py`).
+- Documentation updates: documented shell/edit/code tools as structured observation producers and kept tool execution observation contracts in the runtime docs (`docs/llm/MODULE_CARDS.md`; `docs/llm/STATE_AND_CONTRACTS.md`).
+- Verification: run `python -m pytest tests/test_tool_observations.py tests/test_shell_tools.py tests/test_edit_tools.py -v` after changing observation fields.
+
+## PLAN04 Approval-Gated Shell And Edit Tools - 2026-06-14T20:20:00+08:00
+
+- Production code edits: added shell command classification, patch approval classification, policy wiring through coding-agent capability registration, and approval pause/resume coverage through existing `RunState` APIs (`src/agents/coding_policies.py`; `src/agents/coding_agent.py`; `src/agents/tool_planning.py`; `src/agents/tool_execution.py`; `src/agents/run_resume.py`).
+- Behavior update: valid `dry_run=False` patch writes now require approval before execution, including small add/update patches; `dry_run=True` validation still runs without approval, and invalid patch text is allowed to reach the patch parser for normal structured errors (`src/agents/coding_policies.py:PatchApprovalPolicy.classify_patch_text`).
+- Documentation updates: clarified the edit approval contract in `STATE_AND_CONTRACTS.md` and the shell/edit tool card in `MODULE_CARDS.md`.
+- Verification: run `python -m pytest tests/test_coding_policies.py tests/test_tool_approval_pause.py tests/test_tool_approval_runtime.py tests/test_coding_agent_profile.py -v` after changing approval policy or resume behavior.
+
+## Trajectory JSONL Evidence - 2026-06-14T20:30:00+08:00
+
+- Production code edits: exported `TrajectoryEvent`, `trajectory_events_from_result`, and `write_trajectory_jsonl` from the package root after adding the trajectory writer and coding CLI flag (`src/agents/__init__.py`; `src/agents/trajectory.py`; `src/agents/coding_cli.py`).
+- Documentation updates: documented trajectory event types and contracts in `STATE_AND_CONTRACTS.md`, added CLI smoke instructions to `RUNTIME_FLOWS.md`, and registered the trajectory module card in `MODULE_CARDS.md`.
+- Smoke command: `python -m agents.coding_cli --workspace . --task "Inspect repository and summarize the current agent state." --trajectory-jsonl .agent/last.jsonl`.
+- Verification: run `python -m pytest tests/test_trajectory.py tests/test_coding_cli.py tests/test_result.py tests/test_run_state.py tests/test_public_api.py -v` after changing trajectory exports or event mapping.
+
+## Scheme A Docs Refresh - 2026-06-14T21:43:07+08:00
+
+- Source state: HEAD `10ff882d29b22cb97401a3b907f7dc9990f7f9aa` with working-tree changes under `my_agent` and `teach`; git status showed Scheme A source/test additions plus prior `docs/llm` edits.
+- Codegraph action: queried latest project-scoped codegraph for `my_agent`; status is 109 Python files, 2770 nodes, and 7087 edges.
+- Plan evidence: inspected `teach/PLAN01.md` through `teach/PLAN05.md`; the plans describe local coding CLI, workspace manifest, structured tool observations, approval-gated shell/edit tools, and trajectory JSONL.
+- Documentation updates: refreshed `ARCHITECTURE_INDEX.md`, `MODULE_CARDS.md`, `RUNTIME_FLOWS.md`, `STATE_AND_CONTRACTS.md`, and `SYMBOL_MAP.md` so the Scheme A modules are represented in metadata, subsystem ownership, runtime flows, state contracts, symbol lookup, invariants, risks, and test anchors.
+- Production code edits: none in this docs refresh.
+- Verification: `git diff --check -- my_agent/docs/llm` passed; no runtime tests were run because only LLM-facing Markdown documentation was edited.

@@ -11,16 +11,52 @@ from agents.coding_agent import (
     build_coding_agent,
 )
 from agents.agent import Agent
+from agents.coding_policies import PatchApprovalPolicy, ShellCommandPolicy
 from agents.environment import LocalEnvironment
+from agents.environment import CommandResult
 from agents.memory import AgentMemory
 from agents.run_config import RunConfig
 from agents.run_context import (
     CONTEXT_ENVIRONMENT_KEY,
     CONTEXT_SELECTED_FILES_KEY,
+    CONTEXT_WORKSPACE_MANIFEST_KEY,
     CONTEXT_WORKSPACE_KEY,
 )
 from agents.selected_files import SelectedFilesState
+from agents.tools import ToolExecutionError
 from agents.workspace import Workspace
+from agents.workspace_manifest import WorkspaceManifest
+
+
+class RecordingEnvironment:
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+
+    def run(
+        self,
+        command,
+        cwd=None,
+        *,
+        timeout_seconds=None,
+        env=None,
+    ) -> CommandResult:
+        self.commands.append(command)
+        return CommandResult(
+            command=command,
+            cwd=cwd or ".",
+            returncode=0,
+            stdout=f"ran {command}",
+        )
+
+
+DELETE_PATCH = """*** Begin Patch
+*** Delete File: old.txt
+*** End Patch"""
+
+ADD_PATCH = """*** Begin Patch
+*** Add File: notes.txt
++hello
+*** End Patch"""
 
 
 def test_coding_capabilities_have_stable_names() -> None:
@@ -147,6 +183,8 @@ def test_coding_agent_profile_factories_create_common_profiles() -> None:
     assert edit_local.enable_edit is False
     assert shell_test.require_approval_for_shell is True
     assert edit_local.require_approval_for_edit is True
+    assert isinstance(shell_test.shell_command_policy, ShellCommandPolicy)
+    assert isinstance(edit_local.patch_approval_policy, PatchApprovalPolicy)
 
 
 def test_coding_agent_profile_summarizes_enabled_capabilities() -> None:
@@ -172,6 +210,8 @@ def test_coding_agent_profile_defaults_are_safe() -> None:
     assert profile.enable_edit is False
     assert profile.require_approval_for_shell is True
     assert profile.require_approval_for_edit is True
+    assert isinstance(profile.shell_command_policy, ShellCommandPolicy)
+    assert isinstance(profile.patch_approval_policy, PatchApprovalPolicy)
     assert profile.max_turns == 12
     assert profile.max_steps == 20
 
@@ -318,8 +358,144 @@ def test_build_coding_agent_registers_shell_tools_when_explicitly_enabled(tmp_pa
     assert "run_shell_command" in tool_names
     assert "run_test_command" in tool_names
     assert "apply_patch" not in tool_names
-    assert setup.agent.tool_registry.get("run_shell_command").needs_approval is True
-    assert setup.agent.tool_registry.get("run_test_command").needs_approval is True
+    shell_tool = setup.agent.tool_registry.get("run_shell_command")
+    test_tool = setup.agent.tool_registry.get("run_test_command")
+    safe_shell = shell_tool.requires_approval_for(
+        None,
+        None,
+        {"call_id": "safe-shell", "arguments": {"command": "python -m pytest"}},
+    )
+    risky_shell = shell_tool.requires_approval_for(
+        None,
+        None,
+        {"call_id": "risky-shell", "arguments": {"command": "pip install requests"}},
+    )
+    test_approval = test_tool.requires_approval_for(
+        None,
+        None,
+        {"call_id": "test-call", "arguments": {}},
+    )
+    assert safe_shell.requires_approval is False
+    assert risky_shell.requires_approval is True
+    assert test_approval.requires_approval is False
+
+
+def test_build_coding_agent_keeps_block_policy_when_shell_approval_is_disabled(
+    tmp_path,
+) -> None:
+    environment = RecordingEnvironment()
+    profile = CodingAgentProfile(
+        enable_shell=True,
+        require_approval_for_shell=False,
+    )
+
+    setup = build_coding_agent(
+        model=object(),
+        workspace=tmp_path,
+        profile=profile,
+        environment=environment,
+    )
+    shell_tool = setup.agent.tool_registry.get("run_shell_command")
+
+    risky_approval = shell_tool.requires_approval_for(
+        None,
+        None,
+        {"call_id": "risky-shell", "arguments": {"command": "pip install requests"}},
+    )
+    assert risky_approval.requires_approval is False
+
+    try:
+        shell_tool.execute({"command": "git reset --hard HEAD"})
+    except ToolExecutionError as exc:
+        assert "blocked_shell_command" in str(exc)
+    else:
+        raise AssertionError("Expected blocked shell command rejection")
+    assert environment.commands == []
+
+
+def test_build_coding_agent_uses_manifest_workspace_context_metadata_and_env(
+    tmp_path,
+) -> None:
+    manifest = WorkspaceManifest(
+        root=tmp_path,
+        allowed_paths=("src",),
+        ignore_patterns=(".git", ".cache"),
+        default_test_command="python -m pytest tests/unit",
+        allowed_test_commands=("ruff check .",),
+        env={"PYTHONPATH": "src", "SECRET_TOKEN": "hidden"},
+    )
+    profile = CodingAgentProfile(enable_shell=True)
+
+    setup = build_coding_agent(model=object(), manifest=manifest, profile=profile)
+
+    assert setup.workspace.root == tmp_path.resolve()
+    assert setup.workspace.allowed_paths == (tmp_path.resolve() / "src",)
+    assert setup.run_config.context[CONTEXT_WORKSPACE_KEY] is setup.workspace
+    assert setup.run_config.context[CONTEXT_WORKSPACE_MANIFEST_KEY] is manifest
+    assert isinstance(setup.environment, LocalEnvironment)
+    assert setup.environment.env == {"PYTHONPATH": "src", "SECRET_TOKEN": "hidden"}
+    assert setup.run_config.metadata == {
+        "context_summary": {
+            "workspace_root": str(tmp_path.resolve()),
+            "environment_type": "LocalEnvironment",
+        },
+        "workspace_manifest": manifest.metadata(),
+    }
+    assert "hidden" not in repr(setup.run_config.metadata)
+
+
+def test_build_coding_agent_rejects_workspace_manifest_root_mismatch(tmp_path) -> None:
+    manifest = WorkspaceManifest(root=tmp_path)
+
+    try:
+        build_coding_agent(
+            model=object(),
+            workspace=tmp_path / "other",
+            manifest=manifest,
+        )
+    except ValueError as exc:
+        assert "workspace root does not match manifest root" in str(exc)
+    else:
+        raise AssertionError("Expected workspace and manifest root mismatch")
+
+
+def test_build_coding_agent_uses_manifest_test_command_policy(tmp_path) -> None:
+    manifest = WorkspaceManifest(
+        root=tmp_path,
+        default_test_command="python -m pytest tests/unit",
+        allowed_test_commands=("ruff check .",),
+    )
+    environment = RecordingEnvironment()
+    profile = CodingAgentProfile(
+        enabled_capabilities=(CodingCapability.WORKSPACE_READ, CodingCapability.TEST),
+    )
+
+    setup = build_coding_agent(
+        model=object(),
+        manifest=manifest,
+        profile=profile,
+        environment=environment,
+    )
+
+    setup.agent.tool_registry.execute("run_test_command", {})
+    setup.agent.tool_registry.execute(
+        "run_test_command",
+        {"command": "ruff check ."},
+    )
+
+    assert environment.commands == [
+        "python -m pytest tests/unit",
+        "ruff check .",
+    ]
+    try:
+        setup.agent.tool_registry.execute(
+            "run_test_command",
+            {"command": "python -m unittest"},
+        )
+    except ToolExecutionError as exc:
+        assert "not in the test command allowlist" in str(exc)
+    else:
+        raise AssertionError("Expected test command allowlist rejection")
 
 
 def test_build_coding_agent_registers_edit_tool_when_explicitly_enabled(tmp_path) -> None:
@@ -331,7 +507,25 @@ def test_build_coding_agent_registers_edit_tool_when_explicitly_enabled(tmp_path
     assert "apply_patch" in tool_names
     assert "run_shell_command" not in tool_names
     assert "run_test_command" not in tool_names
-    assert setup.agent.tool_registry.get("apply_patch").needs_approval is True
+    patch_tool = setup.agent.tool_registry.get("apply_patch")
+    dry_run_delete = patch_tool.requires_approval_for(
+        None,
+        None,
+        {"call_id": "dry-run-delete", "arguments": {"patch": DELETE_PATCH, "dry_run": True}},
+    )
+    actual_delete = patch_tool.requires_approval_for(
+        None,
+        None,
+        {"call_id": "actual-delete", "arguments": {"patch": DELETE_PATCH, "dry_run": False}},
+    )
+    small_add = patch_tool.requires_approval_for(
+        None,
+        None,
+        {"call_id": "small-add", "arguments": {"patch": ADD_PATCH, "dry_run": False}},
+    )
+    assert dry_run_delete.requires_approval is False
+    assert actual_delete.requires_approval is True
+    assert small_add.requires_approval is True
     assert setup.environment is None
 
 

@@ -214,6 +214,35 @@ class PublicApiTestCase(unittest.TestCase):
         self.assertIn("create_apply_patch_tool", agents.__all__)
         self.assertTrue(hasattr(agents, "create_apply_patch_tool"))
 
+    def test_coding_cli_api_is_public_from_package_root(self) -> None:
+        expected_coding_cli_api = {
+            "CodingCliConfig",
+            "build_coding_cli_setup",
+            "parse_coding_cli_args",
+            "run_coding_agent_cli",
+        }
+
+        self.assertTrue(expected_coding_cli_api.issubset(set(agents.__all__)))
+        for public_name in expected_coding_cli_api:
+            with self.subTest(public_name=public_name):
+                self.assertTrue(hasattr(agents, public_name))
+
+    def test_trajectory_api_is_public_from_package_root(self) -> None:
+        expected_trajectory_api = {
+            "TrajectoryEvent",
+            "trajectory_events_from_result",
+            "write_trajectory_jsonl",
+        }
+
+        self.assertTrue(expected_trajectory_api.issubset(set(agents.__all__)))
+        for public_name in expected_trajectory_api:
+            with self.subTest(public_name=public_name):
+                self.assertTrue(hasattr(agents, public_name))
+
+    def test_workspace_manifest_api_is_public_from_package_root(self) -> None:
+        self.assertIn("WorkspaceManifest", agents.__all__)
+        self.assertTrue(hasattr(agents, "WorkspaceManifest"))
+
     def test_model_hardening_api_is_public_without_private_helpers(self) -> None:
         expected_model_api = {
             "ModelAdapter",

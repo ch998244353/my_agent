@@ -170,13 +170,24 @@ class RunResultBase:
         return self.raw_responses[-1].response_id
 
     @property
+    # 把一次 agent run 的最终输出、工具结果、审批状态统一暴露给 CLI 和调用方
     def pending_approvals(self) -> tuple[ToolApprovalRequest, ...]:
         return tuple(
             item.payload
             for item in self.new_items
             if item.item_type == "tool_approval_required"
             and isinstance(item.payload, ToolApprovalRequest)
+            and self._approval_request_is_pending(item.payload)
         )
+
+    def _approval_request_is_pending(self, request: ToolApprovalRequest) -> bool:
+        if self.context_wrapper is None:
+            return True
+        status = self.context_wrapper.approval_status_for(
+            request.tool_name,
+            request.call_id,
+        )
+        return status in ("unknown", "pending")
 
     @property
     def pending_approval_summaries(self) -> tuple[PendingApprovalSummary, ...]:

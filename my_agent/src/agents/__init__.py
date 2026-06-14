@@ -165,6 +165,11 @@ from .tracing import (
     trace,
     turn_span,
 )
+from .trajectory import (
+    TrajectoryEvent,
+    trajectory_events_from_result,
+    write_trajectory_jsonl,
+)
 from .turn_resolution import (
     MODEL_RETURNED_NO_TOOL_CALL,
     NextStepFinalOutput,
@@ -186,6 +191,7 @@ from .tools import (
 )
 from .verification import VerificationPolicy, VerificationResult, VerificationRunner
 from .workspace import Workspace, WorkspacePathError
+from .workspace_manifest import WorkspaceManifest
 from .workspace_inventory import (
     WorkspaceFileEntry,
     WorkspaceInventory,
@@ -202,6 +208,22 @@ def run_chat_cli(runtime: ChatRuntime) -> None:
     from .chat_cli import run_chat_cli as _run_chat_cli
 
     return _run_chat_cli(runtime)
+
+
+_CODING_CLI_EXPORTS = {
+    "CodingCliConfig",
+    "build_coding_cli_setup",
+    "parse_coding_cli_args",
+    "run_coding_agent_cli",
+}
+
+
+def __getattr__(name: str) -> object:
+    if name in _CODING_CLI_EXPORTS:
+        from . import coding_cli
+
+        return getattr(coding_cli, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
@@ -226,6 +248,7 @@ __all__ = [
     "CodeExecutionResult",
     "CodingAgentProfile",
     "CodingAgentSetup",
+    "CodingCliConfig",
     "CompactionPolicy",
     "DEFAULT_TEST_COMMAND",
     "Environment",
@@ -308,12 +331,14 @@ __all__ = [
     "TraceRecord",
     "TracingExporter",
     "TracingProcessor",
+    "TrajectoryEvent",
     "VerificationPolicy",
     "VerificationResult",
     "VerificationRunner",
     "Workspace",
     "WorkspaceFileEntry",
     "WorkspaceInventory",
+    "WorkspaceManifest",
     "WorkspacePathError",
     "BatchTraceProcessor",
     "DebugTracingProcessor",
@@ -331,6 +356,7 @@ __all__ = [
     "build_chat_runtime",
     "build_chat_session",
     "build_coding_agent",
+    "build_coding_cli_setup",
     "build_task_repo_context",
     "build_workspace_inventory",
     "build_tool_execution_plan",
@@ -369,6 +395,7 @@ __all__ = [
     "span",
     "supports_model_adapter",
     "task_span",
+    "trajectory_events_from_result",
     "tool_input_guardrail",
     "tool_output_guardrail",
     "tool_output_preview",
@@ -376,10 +403,13 @@ __all__ = [
     "trace",
     "turn_span",
     "validate_tool_arguments",
+    "write_trajectory_jsonl",
     "output_schema_from_output_type",
     "parse_structured_output",
+    "parse_coding_cli_args",
     "render_tool_signature",
     "run_chat_turn",
+    "run_coding_agent_cli",
     "resume_agent_loop",
     "resume_pending_tool_approvals",
     "resolve_mentions_against_inventory",

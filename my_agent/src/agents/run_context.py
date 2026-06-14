@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from .selected_files import SelectedFilesState
     from .verification import VerificationRunner
     from .workspace import Workspace
+    from .workspace_manifest import WorkspaceManifest
 
 ToolApprovalStatus = Literal["unknown", "pending", "approved", "rejected"]
 ContextValueT = TypeVar("ContextValueT")
@@ -21,6 +22,7 @@ CONTEXT_ENVIRONMENT_KEY = "environment"
 CONTEXT_VERIFICATION_RUNNER_KEY = "verification_runner"
 CONTEXT_SELECTED_FILES_KEY = "selected_files"
 CONTEXT_REPO_CONTEXT_KEY = "repo_context"
+CONTEXT_WORKSPACE_MANIFEST_KEY = "workspace_manifest"
 
 
 @dataclass
@@ -96,6 +98,12 @@ class RunContextWrapper:
         from .repo_context import RepoContext
 
         return self._context_value(CONTEXT_REPO_CONTEXT_KEY, RepoContext)
+
+    @property
+    def workspace_manifest(self) -> WorkspaceManifest | None:
+        from .workspace_manifest import WorkspaceManifest
+
+        return self._context_value(CONTEXT_WORKSPACE_MANIFEST_KEY, WorkspaceManifest)
 
     @staticmethod
     def _approval_key(tool_name: str, call_id: str) -> tuple[str, str]:

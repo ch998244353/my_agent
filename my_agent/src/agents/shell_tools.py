@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from .contracts import ToolArgument, ToolSpec
+from .coding_policies import ShellCommandPolicy
 from .environment import Environment
+from .tool_observations import command_result_observation
 from .tools import FunctionTool, ToolApproval, ToolExecutionError
 
 
@@ -14,6 +16,7 @@ def create_shell_command_tool(
     environment: Environment,
     *,
     needs_approval: ToolApproval = True,
+    command_policy: ShellCommandPolicy | None = None,
 ) -> FunctionTool:
     def run_shell_command(
         command: str,
@@ -21,12 +24,23 @@ def create_shell_command_tool(
         timeout_seconds: float | None = None,
         max_chars: int | None = None,
     ) -> str:
+        if command_policy is not None:
+            decision = command_policy.classify(command)
+            if decision.blocked:
+                raise ToolExecutionError(
+                    "run_shell_command",
+                    f"{decision.category}: {decision.reason}",
+                )
         result = environment.run(
             command,
             cwd=cwd,
             timeout_seconds=timeout_seconds,
         )
-        return result.to_observation(max_chars=max_chars)
+        return command_result_observation(
+            "run_shell_command",
+            result,
+            max_chars=max_chars,
+        ).to_text()
 
     return FunctionTool(
         spec=ToolSpec(
@@ -60,7 +74,11 @@ def create_shell_command_tool(
             returns="string",
         ),
         handler=run_shell_command,
-        needs_approval=needs_approval,
+        needs_approval=(
+            command_policy.needs_approval
+            if command_policy is not None and needs_approval is True
+            else needs_approval
+        ),
     )
 
 
@@ -90,7 +108,11 @@ def create_test_command_tool(
             cwd=cwd,
             timeout_seconds=timeout_seconds,
         )
-        return result.to_observation(max_chars=max_chars)
+        return command_result_observation(
+            "run_test_command",
+            result,
+            max_chars=max_chars,
+        ).to_text()
 
     return FunctionTool(
         spec=ToolSpec(

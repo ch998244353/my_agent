@@ -4,13 +4,35 @@ import sys
 
 import pytest
 
-from agents.environment import LocalEnvironment
+from agents.coding_policies import ShellCommandPolicy
+from agents.environment import CommandResult, LocalEnvironment
 from agents.shell_tools import create_shell_command_tool, create_test_command_tool
 from agents.tools import ToolExecutionError
 
 
 def _python_command(script: str) -> str:
     return f'"{sys.executable}" -c "{script}"'
+
+
+class RecordingEnvironment:
+    def __init__(self) -> None:
+        self.commands: list[str] = []
+
+    def run(
+        self,
+        command: str,
+        cwd=None,
+        *,
+        timeout_seconds=None,
+        env=None,
+    ) -> CommandResult:
+        self.commands.append(command)
+        return CommandResult(
+            command=command,
+            cwd=cwd or ".",
+            returncode=0,
+            stdout="recorded\n",
+        )
 
 
 def test_shell_command_tool_spec_and_default_approval(tmp_path) -> None:
@@ -33,6 +55,47 @@ def test_shell_command_tool_spec_and_default_approval(tmp_path) -> None:
     assert approval.call_id == "call-1"
 
 
+def test_shell_command_tool_uses_command_policy_for_approval(tmp_path) -> None:
+    tool = create_shell_command_tool(
+        LocalEnvironment(cwd=tmp_path),
+        command_policy=ShellCommandPolicy(),
+    )
+
+    safe_approval = tool.requires_approval_for(
+        None,
+        None,
+        {"call_id": "safe-call", "arguments": {"command": "python -m pytest"}},
+    )
+    risky_approval = tool.requires_approval_for(
+        None,
+        None,
+        {"call_id": "risky-call", "arguments": {"command": "pip install requests"}},
+    )
+    blocked_approval = tool.requires_approval_for(
+        None,
+        None,
+        {"call_id": "blocked-call", "arguments": {"command": "git reset --hard HEAD"}},
+    )
+
+    assert safe_approval.requires_approval is False
+    assert risky_approval.requires_approval is True
+    assert blocked_approval.requires_approval is True
+
+
+def test_shell_command_tool_rejects_blocked_command_before_execution() -> None:
+    environment = RecordingEnvironment()
+    tool = create_shell_command_tool(
+        environment,
+        command_policy=ShellCommandPolicy(),
+    )
+
+    with pytest.raises(ToolExecutionError) as error:
+        tool.execute({"command": "git reset --hard HEAD"})
+
+    assert environment.commands == []
+    assert "blocked_shell_command" in str(error.value)
+
+
 def test_shell_command_tool_returns_command_observation(tmp_path) -> None:
     tool = create_shell_command_tool(LocalEnvironment(cwd=tmp_path))
 
@@ -42,8 +105,9 @@ def test_shell_command_tool_returns_command_observation(tmp_path) -> None:
         }
     )
 
-    assert "Command observation" in observation
-    assert "status: success" in observation
+    assert "Tool observation" in observation
+    assert "tool: run_shell_command" in observation
+    assert "status: ok" in observation
     assert "stdout:\nshell-ok" in observation
 
 
@@ -82,7 +146,8 @@ def test_test_command_tool_spec_and_default_command(tmp_path) -> None:
     ]
     observation = tool.execute({})
 
-    assert "status: success" in observation
+    assert "tool: run_test_command" in observation
+    assert "status: ok" in observation
     assert "test-default" in observation
 
 
@@ -95,7 +160,7 @@ def test_test_command_tool_allows_allowlisted_command(tmp_path) -> None:
 
     observation = tool.execute({"command": allowed_command})
 
-    assert "status: success" in observation
+    assert "status: ok" in observation
     assert "allowed-test" in observation
 
 

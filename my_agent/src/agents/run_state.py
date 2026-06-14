@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
-from .contracts import ModelResponse, RunItem, ToolCall
+from .contracts import ModelResponse, RunItem, ToolApprovalRequest, ToolCall
 from .guardrails import InputGuardrailResult, OutputGuardrailResult
 from .result import RunResult
 from .run_context import RunContextWrapper
@@ -84,12 +84,59 @@ def _snapshot_from_state(
     )
 
 
-def _run_items_from_snapshot(items: tuple[dict[str, Any], ...]) -> list[RunItem]:
+#agent 因 工具调用请求 暂停后保存状态，恢复时把 JSON dict 还原成审批请求对象，避免 pending 信息丢失
+def _tool_approval_request_from_state(
+    payload: Any,
+    approvals_by_call_id: Mapping[str, ApprovalSnapshot] | None = None,
+) -> ToolApprovalRequest | Any:
+    if isinstance(payload, ToolApprovalRequest):
+        return payload
+    if not isinstance(payload, Mapping):
+        return payload
+    if "tool_name" not in payload and "call_id" in payload:
+        approval = (approvals_by_call_id or {}).get(str(payload["call_id"]))
+        if approval is not None:
+            return ToolApprovalRequest(
+                tool_name=approval.tool_name,
+                call_id=approval.call_id,
+                arguments=dict(approval.arguments),
+                reason=approval.reason,
+            )
+    return ToolApprovalRequest(
+        tool_name=str(payload["tool_name"]),
+        call_id=str(payload["call_id"]),
+        arguments=dict(payload.get("arguments") or {}),
+        reason=payload.get("reason"),
+    )
+
+# 。入参是 item 类型和原始 payload，返回恢复后的 payload。现在只特殊处理审批请求，其它 run item 保持原样，避免扩大本节改动范围
+def _run_item_payload_from_snapshot(
+    item_type: str,
+    payload: Any,
+    approvals_by_call_id: Mapping[str, ApprovalSnapshot] | None = None,
+) -> Any:
+    if item_type == "tool_approval_required":
+        return _tool_approval_request_from_state(payload, approvals_by_call_id)
+    return payload
+
+
+def _run_items_from_snapshot(
+    items: tuple[dict[str, Any], ...],
+    approvals: tuple[ApprovalSnapshot, ...] = (),
+) -> list[RunItem]:
+    approvals_by_call_id = {
+        approval.call_id: approval
+        for approval in approvals
+    }
     return [
         RunItem(
             item_type=item["item_type"],
             step_number=int(item["step_number"]),
-            payload=item.get("payload"),
+            payload=_run_item_payload_from_snapshot(
+                item["item_type"],
+                item.get("payload"),
+                approvals_by_call_id,
+            ),
             metadata=dict(item.get("metadata") or {}),
         )
         for item in items
@@ -141,7 +188,10 @@ class RunState:
         context = context_wrapper or RunContextWrapper()
         context.import_tool_approvals(restored_snapshot.tool_approvals)
         return cls(
-            new_items=_run_items_from_snapshot(restored_snapshot.new_items),
+            new_items=_run_items_from_snapshot(
+                restored_snapshot.new_items,
+                restored_snapshot.tool_approvals,
+            ),
             input=restored_snapshot.input,
             last_agent=agent,
             current_turn=restored_snapshot.current_turn,

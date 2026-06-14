@@ -13,6 +13,31 @@
 9. Tool calls execute sequentially; handoff calls delegate to a target agent and stop the current tool loop (`src/agents/run_loop.py:_run_agent_loop_impl`; `src/agents/run_steps.py:execute_handoff`; `src/agents/tool_execution.py:execute_tool_call`).
 10. On exit, lifecycle `on_agent_end` emits, `build_run_result` creates `RunResult`, and session history is saved if `RunConfig.session` exists (`src/agents/lifecycle.py:emit_agent_end`; `src/agents/run_state.py:build_run_result`; `src/agents/run_loop.py:_build_result_and_save_session`).
 
+## Local Coding CLI Setup
+
+1. `parse_coding_cli_args` validates profile and positive numeric limits, then returns a frozen `CodingCliConfig` with task, workspace, model, session, trajectory, and test-command settings (`src/agents/coding_cli.py:parse_coding_cli_args`; `src/agents/coding_cli.py:CodingCliConfig`).
+2. `build_coding_cli_setup` builds a `WorkspaceManifest` from CLI workspace/test-command flags, resolves a `CodingAgentProfile`, creates an `OpenAIResponsesModel`, and calls `build_coding_agent` (`src/agents/coding_cli.py:build_coding_cli_setup`; `src/agents/workspace_manifest.py:WorkspaceManifest`; `src/agents/coding_agent.py:build_coding_agent`).
+3. `build_coding_agent` validates manifest/workspace compatibility, builds or accepts a runtime `Workspace`, creates a `LocalEnvironment` when shell/test/edit capabilities require one, and stores workspace, selected files, and manifest in `RunConfig.context` (`src/agents/coding_agent.py:build_coding_agent`; `src/agents/environment.py:LocalEnvironment`; `src/agents/run_context.py:CONTEXT_WORKSPACE_MANIFEST_KEY`).
+4. Capability registration adds read tools for workspace read, shell/test tools for shell-test/edit-local profiles, and apply-patch for edit-local; shell/edit tools receive policy callables when approval is enabled (`src/agents/coding_agent.py:_register_capability_tools`; `src/agents/shell_tools.py:create_shell_command_tool`; `src/agents/edit_tools.py:create_apply_patch_tool`).
+5. After `Agent.run`, `_print_result` writes final output or pending approval summaries, `_exit_code_for_result` maps result state to `0`, `1`, or `2`, and `_write_trajectory_from_result` runs only when `--trajectory-jsonl` is set (`src/agents/coding_cli.py:_print_result`; `src/agents/coding_cli.py:_exit_code_for_result`; `src/agents/coding_cli.py:_write_trajectory_from_result`).
+
+## Coding Tool Observation and Policy Flow
+
+1. Shell command planning calls `ShellCommandPolicy.needs_approval` through the normal `FunctionTool.needs_approval` contract when profile approval is enabled (`src/agents/coding_policies.py:ShellCommandPolicy.needs_approval`; `src/agents/tool_runtime.py:requires_tool_approval`).
+2. At handler time, `run_shell_command` classifies again and raises `ToolExecutionError` for blocked commands before `Environment.run` can execute shell text (`src/agents/shell_tools.py:create_shell_command_tool`; `src/agents/coding_policies.py:ShellCommandPolicy.classify`; `src/agents/tools.py:ToolExecutionError`).
+3. Successful or failed shell/test command execution becomes a `ToolObservation` via `command_result_observation`, then renders to stable text for model feedback (`src/agents/environment.py:CommandResult`; `src/agents/tool_observations.py:command_result_observation`; `src/agents/tool_observations.py:ToolObservation.to_text`).
+4. Patch planning calls `PatchApprovalPolicy.needs_approval`; `dry_run=True` and invalid patch text are allowed to reach the parser, but valid write patches pause for approval before the tool writes files (`src/agents/coding_policies.py:PatchApprovalPolicy.needs_approval`; `src/agents/coding_policies.py:PatchApprovalPolicy.classify_patch_text`; `src/agents/edit_tools.py:create_apply_patch_tool`).
+5. Patch results become `ToolObservation` values with dry-run, changed files, change count, and error count details before being returned to the runtime (`src/agents/tool_observations.py:patch_result_observation`; `src/agents/patches.py:PatchResult`).
+
+## Trajectory JSONL Export
+
+1. The local coding CLI accepts `--trajectory-jsonl PATH` and keeps the flag optional; runs without the flag do not write a trajectory (`src/agents/coding_cli.py:_build_parser`; `src/agents/coding_cli.py:CodingCliConfig`).
+2. After the agent run completes and `_print_result` has written the user-visible output, the CLI builds trajectory events from the returned `RunResult` (`src/agents/coding_cli.py:run_coding_agent_cli`; `src/agents/coding_cli.py:_write_trajectory_from_result`).
+3. `trajectory_events_from_result` prepends `run_started`, maps supported `RunItem` values, and ends with `final_output` or an evidence-backed `run_stopped` event (`src/agents/trajectory.py:trajectory_events_from_result`).
+4. `write_trajectory_jsonl` writes one JSON object per line and creates parent directories, making the file usable as later debugging or eval evidence (`src/agents/trajectory.py:write_trajectory_jsonl`).
+5. Smoke command from the package root: `python -m agents.coding_cli --workspace . --task "Inspect repository and summarize the current agent state." --trajectory-jsonl .agent/last.jsonl`.
+6. Smoke evidence: inspect `.agent/last.jsonl`; the first line should have `event_type` `run_started`, runtime lines should reflect model/tool/approval/verification evidence that actually occurred, and the final line should be `final_output` or `run_stopped`.
+
 ## Model Turn
 
 1. `prepare_turn_input` calls `build_turn_context` and obtains tool specs from `Agent._tool_specs_for_model` (`src/agents/model_turn.py:prepare_turn_input`; `src/agents/context_chunks.py:build_turn_context`; `src/agents/agent.py:Agent._tool_specs_for_model`).
