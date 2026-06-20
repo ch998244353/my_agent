@@ -5,9 +5,11 @@ from typing import TYPE_CHECKING
 
 from .contracts import ToolCall
 from .lifecycle import LifecycleHookSequence
+from .run_recording import run_verification_after_tool
 from .run_state import RunState
 from .run_steps import ToolExecutionOutcome, execute_tool_call
 from .tool_runtime import ToolExecutionLimits
+from .verification import VerificationPolicy, VerificationRunner
 
 if TYPE_CHECKING:
     from .agent import Agent
@@ -39,6 +41,8 @@ def resume_pending_tool_approvals(
     finalize_output: bool = True,
     trace_include_sensitive_data: bool = True,
     default_execution_limits: ToolExecutionLimits | None = None,
+    verification_policy: VerificationPolicy | None = None,
+    verification_runner: VerificationRunner | None = None,
 ) -> ResumeToolApprovalResult:
     outcomes: list[ToolExecutionOutcome] = []
     remaining_tool_calls: list[ToolCall] = []
@@ -55,19 +59,28 @@ def resume_pending_tool_approvals(
             )
             break
 
-        outcomes.append(
-            execute_tool_call(
+        step_number = run_state.next_step_number()
+        outcome = execute_tool_call(
+            agent,
+            action,
+            run_state,
+            step_number=step_number,
+            tool_use_behavior=tool_use_behavior,
+            hooks=hooks,
+            finalize_output=finalize_output,
+            trace_include_sensitive_data=trace_include_sensitive_data,
+            default_execution_limits=default_execution_limits,
+        )
+        outcomes.append(outcome)
+        if approval_status == "approved":
+            run_verification_after_tool(
                 agent,
                 action,
                 run_state,
-                step_number=run_state.next_step_number(),
-                tool_use_behavior=tool_use_behavior,
-                hooks=hooks,
-                finalize_output=finalize_output,
-                trace_include_sensitive_data=trace_include_sensitive_data,
-                default_execution_limits=default_execution_limits,
+                step_number,
+                verification_policy,
+                verification_runner,
             )
-        )
 
     run_state.pending_tool_calls = tuple(remaining_tool_calls)
     return ResumeToolApprovalResult(

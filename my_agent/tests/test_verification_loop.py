@@ -1,6 +1,7 @@
 from agents import (
     Agent,
     AgentMemory,
+    CommandResult,
     FunctionTool,
     LocalEnvironment,
     RunConfig,
@@ -42,8 +43,23 @@ class TwoToolsThenStopModel:
         return None
 
 
-def test_successful_tool_adds_verification_observation_to_next_turn():
+class FakeVerificationEnvironment:
+    def __init__(self):
+        self.commands = []
+
+    def run(self, command, cwd=None, *, timeout_seconds=None, env=None):
+        self.commands.append(command)
+        return CommandResult(
+            command=command,
+            cwd=cwd or ".",
+            returncode=1,
+            stdout="fake verification failed\n",
+        )
+
+
+def test_failed_verification_observation_from_fake_environment_reaches_next_turn():
     model = ToolThenStopModel()
+    environment = FakeVerificationEnvironment()
     registry = ToolRegistry()
     registry.register(
         FunctionTool(
@@ -64,21 +80,21 @@ def test_successful_tool_adds_verification_observation_to_next_turn():
         max_steps=5,
     )
     config = RunConfig(
+        context={"environment": environment},
         verification=VerificationPolicy(
-            commands=[
-                'python -c "import sys; print(\'verification failed\'); sys.exit(1)"'
-            ],
+            commands=["python -m pytest"],
             auto_after_tools=["apply_patch"],
         )
     )
 
     result = agent.run("change code", config=config)
 
+    assert environment.commands == ["python -m pytest"]
     assert len(model.turn_messages) == 2
     second_turn_text = "\n".join(message.content for message in model.turn_messages[1])
     assert "Verification observation" in second_turn_text
     assert "status: failed" in second_turn_text
-    assert "verification failed" in second_turn_text
+    assert "fake verification failed" in second_turn_text
     assert any(item.item_type == "verification_result" for item in result.new_items)
     summary = result.verification_summary
     assert summary is not None

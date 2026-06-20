@@ -453,6 +453,8 @@ def _run_agent_loop_impl(
                 config.trace_include_sensitive_data if config is not None else True
             ),
             default_execution_limits=effective_tool_execution_limits,
+            verification_policy=config.verification if config is not None else None,
+            verification_runner=verification_runner,
         )
         if resume_result.has_pending_approvals:
             record_run_stopped(

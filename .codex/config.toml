@@ -22,3 +22,6 @@ approval_mode = "approve"
 
 [mcp_servers.codegraph.tools.codegraph_explore]
 approval_mode = "approve"
+
+[mcp_servers.codegraph.tools.codegraph_search]
+approval_mode = "approve"

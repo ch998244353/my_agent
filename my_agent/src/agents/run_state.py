@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 from .contracts import ModelResponse, RunItem, ToolApprovalRequest, ToolCall
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 MAX_TURNS_REACHED = "max_turns_reached"
 MAX_STEPS_REACHED = "max_steps_reached"
+RUN_STATE_SNAPSHOT_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,13 @@ class RunStateSnapshot:
     tool_approvals: tuple[ApprovalSnapshot, ...]
     model_responses: tuple[dict[str, Any], ...]
     new_items: tuple[dict[str, Any], ...]
+
+
+# 导出快照 : 第一个版本
+def run_state_snapshot_to_dict(snapshot: RunStateSnapshot) -> dict[str, Any]:
+    payload = asdict(snapshot)
+    payload["schema_version"] = RUN_STATE_SNAPSHOT_SCHEMA_VERSION
+    return payload
 
 
 def _approval_snapshot_from_state(
@@ -82,6 +90,19 @@ def _snapshot_from_state(
         ),
         new_items=tuple(dict(item) for item in snapshot.get("new_items", ())),
     )
+
+
+def run_state_snapshot_from_dict(data: Mapping[str, Any]) -> RunStateSnapshot:
+    schema_version = data.get("schema_version")
+    if (
+        schema_version is not None
+        and schema_version != RUN_STATE_SNAPSHOT_SCHEMA_VERSION
+    ):
+        raise ValueError(
+            "Unsupported run state snapshot schema version: "
+            f"{schema_version!r}"
+        )
+    return _snapshot_from_state(data)
 
 
 #agent 因 工具调用请求 暂停后保存状态，恢复时把 JSON dict 还原成审批请求对象，避免 pending 信息丢失
@@ -184,7 +205,11 @@ class RunState:
         agent: Agent | None = None,
         context_wrapper: RunContextWrapper | None = None,
     ) -> RunState:
-        restored_snapshot = _snapshot_from_state(snapshot)
+        restored_snapshot = (
+            snapshot
+            if isinstance(snapshot, RunStateSnapshot)
+            else run_state_snapshot_from_dict(snapshot)
+        )
         context = context_wrapper or RunContextWrapper()
         context.import_tool_approvals(restored_snapshot.tool_approvals)
         return cls(
@@ -202,6 +227,21 @@ class RunState:
             pending_tool_calls=_pending_tool_calls_from_approvals(
                 restored_snapshot.tool_approvals
             ),
+        )
+
+    def approve_tool_call(self, tool_name: str, call_id: str) -> None:
+        self.context_wrapper.approve_tool_call(tool_name, call_id)
+
+    def reject_tool_call(
+        self,
+        tool_name: str,
+        call_id: str,
+        rejection_message: str | None = None,
+    ) -> None:
+        self.context_wrapper.reject_tool_call(
+            tool_name,
+            call_id,
+            rejection_message,
         )
 
     # 运行时判断 和 递增方法

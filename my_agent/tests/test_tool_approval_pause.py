@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,11 +14,20 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from agents import Agent, AgentMemory, ToolCall  # noqa: E402
+import agents.coding_cli as coding_cli  # noqa: E402
 from agents.coding_agent import CodingAgentProfile, build_coding_agent  # noqa: E402
+from agents.coding_cli import ApprovalDecision, CodingCliConfig  # noqa: E402
+from agents.coding_state import CodingRunStateEnvelope  # noqa: E402
 from agents.contracts import ModelResponse, ToolApprovalRequest  # noqa: E402
 from agents.environment import CommandResult  # noqa: E402
-from agents.run_context import RunContextWrapper  # noqa: E402
-from agents.run_state import ApprovalSnapshot, RunState, RunStateSnapshot  # noqa: E402
+from agents.run_config import RunConfig  # noqa: E402
+from agents.run_context import CONTEXT_ENVIRONMENT_KEY, RunContextWrapper  # noqa: E402
+from agents.run_state import (  # noqa: E402
+    ApprovalSnapshot,
+    RunState,
+    RunStateSnapshot,
+    run_state_snapshot_to_dict,
+)
 from agents.run_steps import (  # noqa: E402
     ModelTurnResult,
     NextStepStopped,
@@ -26,6 +36,7 @@ from agents.run_steps import (  # noqa: E402
 )
 from agents.tools import function_tool  # noqa: E402
 from agents.trajectory import trajectory_events_from_result  # noqa: E402
+from agents.verification import VerificationPolicy  # noqa: E402
 from agents.workspace_manifest import WorkspaceManifest  # noqa: E402
 
 
@@ -53,6 +64,54 @@ def _resume_agent_loop():
     return resume_agent_loop
 
 
+def _coding_cli_resume_envelope(
+    *,
+    approvals: tuple[ApprovalSnapshot, ...],
+) -> CodingRunStateEnvelope:
+    snapshot = RunStateSnapshot(
+        input="resume task",
+        last_agent_name=None,
+        last_response_id=None,
+        current_turn=1,
+        steps_taken=0,
+        max_turns=None,
+        max_steps=None,
+        tool_approvals=approvals,
+        model_responses=(),
+        new_items=(),
+    )
+    return CodingRunStateEnvelope(
+        version=1,
+        task="resume task",
+        workspace_root=".",
+        profile_name="edit-local",
+        model=None,
+        workspace_manifest={},
+        session_json=None,
+        trajectory_jsonl=None,
+        state=run_state_snapshot_to_dict(snapshot),
+        pending_approvals=tuple(
+            {
+                "tool_name": approval.tool_name,
+                "call_id": approval.call_id,
+                "arguments": approval.arguments,
+                "reason": approval.reason,
+            }
+            for approval in approvals
+        ),
+    )
+
+
+def _coding_cli_resume_setup(agent: Agent):
+    return SimpleNamespace(
+        agent=agent,
+        run_config=SimpleNamespace(
+            context={"resume": True},
+            metadata={"profile": "edit-local"},
+        ),
+    )
+
+
 def test_resume_api_is_exported_from_agents_package() -> None:
     try:
         from agents import (  # noqa: PLC0415
@@ -70,6 +129,126 @@ def test_resume_api_is_exported_from_agents_package() -> None:
     assert public_resume_agent_loop is _resume_agent_loop()
     assert public_resume_pending_tool_approvals is _resume_pending_tool_approvals()
     assert PublicResumeToolApprovalResult.__name__ == "ResumeToolApprovalResult"
+
+
+def test_coding_cli_resume_run_state_applies_approve_decision() -> None:
+    agent = Agent(memory=AgentMemory(), model=RecordingModel())
+    setup = _coding_cli_resume_setup(agent)
+    envelope = _coding_cli_resume_envelope(
+        approvals=(
+            ApprovalSnapshot(
+                tool_name="delete_file",
+                call_id="call_approval",
+                arguments={"path": "notes.txt"},
+                status="pending",
+                reason="Deleting files needs approval.",
+            ),
+        ),
+    )
+    config = CodingCliConfig(
+        approval_decisions=(
+            ApprovalDecision("approve", "delete_file", "call_approval"),
+        ),
+    )
+
+    run_state = coding_cli._run_state_from_state_envelope(envelope, setup, config)
+
+    assert run_state.last_agent is agent
+    assert run_state.context_wrapper.context == {"resume": True}
+    assert run_state.context_wrapper.metadata == {"profile": "edit-local"}
+    assert run_state.context_wrapper.approval_status_for(
+        "delete_file",
+        "call_approval",
+    ) == "approved"
+
+
+def test_coding_cli_resume_run_state_applies_reject_decision() -> None:
+    setup = _coding_cli_resume_setup(Agent(memory=AgentMemory(), model=RecordingModel()))
+    envelope = _coding_cli_resume_envelope(
+        approvals=(
+            ApprovalSnapshot(
+                tool_name="delete_file",
+                call_id="call_approval",
+                arguments={"path": "notes.txt"},
+                status="pending",
+            ),
+        ),
+    )
+    config = CodingCliConfig(
+        approval_decisions=(
+            ApprovalDecision(
+                "reject",
+                "delete_file",
+                "call_approval",
+                "User refused deleting notes.txt.",
+            ),
+        ),
+    )
+
+    run_state = coding_cli._run_state_from_state_envelope(envelope, setup, config)
+
+    assert run_state.context_wrapper.approval_status_for(
+        "delete_file",
+        "call_approval",
+    ) == "rejected"
+    assert run_state.context_wrapper.rejection_message_for(
+        "delete_file",
+        "call_approval",
+    ) == "User refused deleting notes.txt."
+
+
+def test_coding_cli_resume_run_state_approve_all_approves_pending_calls() -> None:
+    setup = _coding_cli_resume_setup(Agent(memory=AgentMemory(), model=RecordingModel()))
+    envelope = _coding_cli_resume_envelope(
+        approvals=(
+            ApprovalSnapshot(
+                tool_name="delete_file",
+                call_id="call_delete",
+                arguments={"path": "notes.txt"},
+                status="pending",
+            ),
+            ApprovalSnapshot(
+                tool_name="run_shell_command",
+                call_id="call_shell",
+                arguments={"command": "python -m pytest"},
+                status="pending",
+            ),
+        ),
+    )
+    config = CodingCliConfig(approve_all=True)
+
+    run_state = coding_cli._run_state_from_state_envelope(envelope, setup, config)
+
+    assert run_state.context_wrapper.approval_status_for(
+        "delete_file",
+        "call_delete",
+    ) == "approved"
+    assert run_state.context_wrapper.approval_status_for(
+        "run_shell_command",
+        "call_shell",
+    ) == "approved"
+
+
+def test_coding_cli_resume_run_state_rejects_unknown_decision() -> None:
+    setup = _coding_cli_resume_setup(Agent(memory=AgentMemory(), model=RecordingModel()))
+    envelope = _coding_cli_resume_envelope(
+        approvals=(
+            ApprovalSnapshot(
+                tool_name="delete_file",
+                call_id="call_approval",
+                arguments={"path": "notes.txt"},
+                status="pending",
+            ),
+        ),
+    )
+    config = CodingCliConfig(
+        approval_decisions=(
+            ApprovalDecision("approve", "delete_file", "call_missing"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Unknown pending approval"):
+        coding_cli._run_state_from_state_envelope(envelope, setup, config)
 
 
 class ApprovalFlowModel:
@@ -497,6 +676,53 @@ def test_approval_resume_round_trip_approved_continues_run_loop() -> None:
     assert resumed_result.reached_final_answer is True
     assert resumed_result.final_answer == "model saw: deleted notes.txt"
     assert model.calls == 2
+
+
+def test_approval_resume_round_trip_approved_runs_verification_after_tool() -> None:
+    calls: list[str] = []
+
+    def delete_file(path: str) -> str:
+        calls.append(path)
+        return f"deleted {path}"
+
+    action = ToolCall("delete_file", {"path": "notes.txt"}, "call_round_trip")
+    model = ApprovalFlowModel(action)
+    agent = Agent(memory=AgentMemory(), model=model)
+    agent.tool_registry.register(function_tool(delete_file, needs_approval=True))
+    environment = RecordingShellEnvironment()
+
+    first_result = agent.run("delete notes.txt")
+    snapshot = first_result.to_state()
+    snapshot["tool_approvals"][0]["status"] = "approved"
+    restored_state = RunState.from_snapshot(
+        snapshot,
+        agent=agent,
+        context_wrapper=RunContextWrapper(
+            context={CONTEXT_ENVIRONMENT_KEY: environment},
+        ),
+    )
+
+    resumed_result = _resume_agent_loop()(
+        agent,
+        restored_state,
+        RunConfig(
+            verification=VerificationPolicy(
+                commands=("python -m pytest",),
+                auto_after_tools=("delete_file",),
+            ),
+        ),
+    )
+
+    verification_items = [
+        item for item in resumed_result.new_items
+        if item.item_type == "verification_result"
+    ]
+    assert calls == ["notes.txt"]
+    assert environment.commands == ["python -m pytest"]
+    assert len(verification_items) == 1
+    assert verification_items[0].metadata["trigger_tool"] == "delete_file"
+    assert verification_items[0].metadata["passed"] is True
+    assert "ran python -m pytest" in verification_items[0].metadata["observation"]
 
 
 def test_unapproved_snapshot_resume_still_reports_pending_approval() -> None:

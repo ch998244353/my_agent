@@ -9,6 +9,10 @@ from typing import Any
 
 from .contracts import RunItem
 from .result import RunResult
+from .tool_runtime import clip_tool_text
+
+
+_FINAL_VERIFICATION_OBSERVATION_CHARS = 1200
 
 
 _RUN_ITEM_EVENT_TYPES: dict[str, str] = {
@@ -95,6 +99,23 @@ def _normalize_trajectory_payload(value: Any) -> object:
     return str(value)
 
 
+def _verification_summary_payload(summary: object | None) -> object:
+    if summary is None:
+        return None
+    last_observation = summary.last_observation
+    return {
+        "attempts": summary.attempts,
+        "passed": summary.passed,
+        "skipped": summary.skipped,
+        "last_observation": None
+        if last_observation is None
+        else clip_tool_text(
+            last_observation,
+            _FINAL_VERIFICATION_OBSERVATION_CHARS,
+        ),
+    }
+
+
 # 接收一个 RunItem、运行 ID 和可选时间戳，返回 TrajectoryEvent
 def _event_from_run_item(
     item: RunItem,
@@ -128,7 +149,7 @@ def _result_summary_payload(result: RunResult) -> dict[str, object]:
         "pending_approvals_count": len(result.pending_approvals),
         "model_turns": len(result.raw_responses),
         "tool_steps": len(result.step_results),
-        "verification_summary": _normalize_trajectory_payload(
+        "verification_summary": _verification_summary_payload(
             result.verification_summary
         ),
         "last_response_id": result.last_response_id,
@@ -137,6 +158,69 @@ def _result_summary_payload(result: RunResult) -> dict[str, object]:
         "has_pending_approvals": result.has_pending_approvals,
     }
     return summary
+
+
+def state_saved_event(
+    run_id: str,
+    state_path: Path | str,
+    pending_count: int,
+    *,
+    timestamp: str | None = None,
+) -> TrajectoryEvent:
+    return TrajectoryEvent(
+        event_type="state_saved",
+        run_id=run_id,
+        step=None,
+        payload={
+            "state_path": _normalize_trajectory_payload(state_path),
+            "pending_count": pending_count,
+        },
+        timestamp=timestamp or _utc_now(),
+    )
+
+
+def resume_started_event(
+    run_id: str,
+    state_path: Path | str,
+    approvals: int,
+    rejections: int,
+    *,
+    timestamp: str | None = None,
+) -> TrajectoryEvent:
+    return TrajectoryEvent(
+        event_type="resume_started",
+        run_id=run_id,
+        step=None,
+        payload={
+            "state_path": _normalize_trajectory_payload(state_path),
+            "approvals": approvals,
+            "rejections": rejections,
+        },
+        timestamp=timestamp or _utc_now(),
+    )
+
+
+def approval_decision_event(
+    run_id: str,
+    tool_name: str,
+    call_id: str,
+    decision: str,
+    reason: str | None,
+    *,
+    timestamp: str | None = None,
+) -> TrajectoryEvent:
+    return TrajectoryEvent(
+        event_type="approval_decision",
+        run_id=run_id,
+        step=None,
+        payload={
+            "tool_name": tool_name,
+            "call_id": call_id,
+            "decision": decision,
+            "reason": reason,
+        },
+        timestamp=timestamp or _utc_now(),
+    )
 
 
 # 生成轨迹第一条事件。它接收运行 ID、任务、workspace、metadata 和时间戳，返回 TrajectoryEvent。业务上它说明“这次 coding agent 是为哪个任务、在哪个目录启动的”

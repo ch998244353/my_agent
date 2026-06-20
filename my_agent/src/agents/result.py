@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 
+from .approval_summaries import approval_summary_for_tool_call
 from .contracts import ChatMessage, ModelResponse, RunItem, ToolApprovalRequest, ToolCall
 from .verification import VerificationResult
 
@@ -31,6 +33,7 @@ class PendingApprovalSummary:
     call_id: str
     arguments: dict[str, Any]
     reason: str | None = None
+    summary: str = ""
 
 
 def _run_item_observation(item: RunItem) -> str | None:
@@ -98,17 +101,43 @@ def _tool_approval_request_to_state(request: ToolApprovalRequest) -> dict[str, A
     }
 
 
-def _model_response_to_state(response: ModelResponse) -> dict[str, Any]:
+# 接收任意 payload，返回 JSON 可保存的数据。业务上处理 verification 结果、工具返回值、模型响应里的复杂对象
+def _json_safe_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_safe_value(asdict(value))
+    if isinstance(value, Mapping):
+        return {
+            str(key): _json_safe_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, set):
+        return [_json_safe_value(item) for item in sorted(value, key=repr)]
     return {
-        "response_id": response.response_id,
-        "output": response.output,
-        "output_text": response.output_text,
-        "tool_calls": [_tool_call_to_state(tool_call) for tool_call in response.tool_calls],
-        "refusal": response.refusal,
-        "usage": response.usage,
-        "request_summary": response.request_summary,
-        "request_id": response.request_id,
+        "type": type(value).__name__,
+        "repr": repr(value),
     }
+
+
+def _model_response_to_state(response: ModelResponse) -> dict[str, Any]:
+    return _json_safe_value(
+        {
+            "response_id": response.response_id,
+            "output": response.output,
+            "output_text": response.output_text,
+            "tool_calls": [
+                _tool_call_to_state(tool_call)
+                for tool_call in response.tool_calls
+            ],
+            "refusal": response.refusal,
+            "usage": response.usage,
+            "request_summary": response.request_summary,
+            "request_id": response.request_id,
+        }
+    )
 
 
 def _run_item_payload_to_state(payload: Any) -> Any:
@@ -127,8 +156,8 @@ def _run_item_to_state(item: RunItem) -> dict[str, Any]:
     return {
         "item_type": item.item_type,
         "step_number": item.step_number,
-        "payload": _run_item_payload_to_state(item.payload),
-        "metadata": dict(item.metadata),
+        "payload": _json_safe_value(_run_item_payload_to_state(item.payload)),
+        "metadata": _json_safe_value(dict(item.metadata)),
     }
 
 
@@ -197,6 +226,12 @@ class RunResultBase:
                 call_id=request.call_id,
                 arguments=dict(request.arguments),
                 reason=request.reason,
+                summary=approval_summary_for_tool_call(
+                    request.tool_name,
+                    request.call_id,
+                    request.arguments,
+                    request.reason,
+                ),
             )
             for request in self.pending_approvals
         )
@@ -248,12 +283,21 @@ class RunResultBase:
         return messages
 
     def to_state(self) -> dict[str, Any]:
-        from .run_state import RunStateSnapshot
+        from .run_state import ApprovalSnapshot, RunStateSnapshot, run_state_snapshot_to_dict
 
         approvals = (
             self.context_wrapper.export_tool_approvals(self.pending_approvals)
             if self.context_wrapper is not None
-            else ()
+            else tuple(
+                ApprovalSnapshot(
+                    tool_name=request.tool_name,
+                    call_id=request.call_id,
+                    arguments=dict(request.arguments),
+                    status="pending",
+                    reason=request.reason,
+                )
+                for request in self.pending_approvals
+            )
         )
         snapshot = RunStateSnapshot(
             input=self.input,
@@ -269,7 +313,7 @@ class RunResultBase:
             ),
             new_items=tuple(_run_item_to_state(item) for item in self.new_items),
         )
-        return asdict(snapshot)
+        return run_state_snapshot_to_dict(snapshot)
 
 
 @dataclass(frozen=True)

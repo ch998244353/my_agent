@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import agents.trajectory as trajectory
 from agents.contracts import ModelResponse, RunItem, ToolApprovalRequest, ToolCall
 from agents.result import RunResult
 from agents.trajectory import (
@@ -87,6 +88,82 @@ def test_write_trajectory_jsonl_rejects_unnormalized_payload(tmp_path: Path) -> 
 
     with pytest.raises(TypeError):
         write_trajectory_jsonl(path, [event])
+
+
+def test_state_saved_event_records_state_path_and_pending_count() -> None:
+    event = trajectory.state_saved_event(
+        "run_state",
+        Path(".agent/run-state.json"),
+        pending_count=2,
+        timestamp="2026-06-20T08:00:00Z",
+    )
+
+    assert event.to_dict() == {
+        "event_type": "state_saved",
+        "run_id": "run_state",
+        "step": None,
+        "payload": {
+            "state_path": ".agent/run-state.json",
+            "pending_count": 2,
+        },
+        "timestamp": "2026-06-20T08:00:00Z",
+    }
+
+
+def test_resume_started_event_records_state_path_and_decision_counts() -> None:
+    event = trajectory.resume_started_event(
+        "run_resume",
+        Path(".agent/run-state.json"),
+        approvals=1,
+        rejections=2,
+        timestamp="2026-06-20T08:30:00Z",
+    )
+
+    assert event.to_dict() == {
+        "event_type": "resume_started",
+        "run_id": "run_resume",
+        "step": None,
+        "payload": {
+            "state_path": ".agent/run-state.json",
+            "approvals": 1,
+            "rejections": 2,
+        },
+        "timestamp": "2026-06-20T08:30:00Z",
+    }
+
+
+@pytest.mark.parametrize(
+    ("decision", "reason"),
+    [
+        ("approved", "approved by user"),
+        ("rejected", "Patch writes outside the requested file."),
+    ],
+)
+def test_approval_decision_event_records_user_decision(
+    decision: str,
+    reason: str,
+) -> None:
+    event = trajectory.approval_decision_event(
+        "run_decision",
+        "apply_patch",
+        "call_123",
+        decision,
+        reason,
+        timestamp="2026-06-20T09:00:00Z",
+    )
+
+    assert event.to_dict() == {
+        "event_type": "approval_decision",
+        "run_id": "run_decision",
+        "step": None,
+        "payload": {
+            "tool_name": "apply_patch",
+            "call_id": "call_123",
+            "decision": decision,
+            "reason": reason,
+        },
+        "timestamp": "2026-06-20T09:00:00Z",
+    }
 
 
 @dataclass(frozen=True)
@@ -268,6 +345,99 @@ def test_trajectory_events_from_result_wraps_items_with_start_and_final_summary(
         "steps_taken": 2,
         "has_pending_approvals": False,
     }
+
+
+def test_final_summary_clips_long_verification_observation() -> None:
+    long_output = "x" * 5000
+    observation = (
+        "Verification observation\n"
+        "status: failed\n"
+        "command: python -m pytest\n"
+        "returncode: 1\n"
+        "timed_out: false\n"
+        "output:\n"
+        f"{long_output}"
+    )
+    result = RunResult(
+        final_answer=None,
+        step_results=[],
+        reached_final_answer=False,
+        steps_taken=1,
+        current_turn=1,
+        new_items=(
+            RunItem(
+                item_type="verification_result",
+                step_number=1,
+                payload=(),
+                metadata={"passed": False, "observation": observation},
+            ),
+            RunItem(
+                item_type="run_stopped",
+                step_number=1,
+                payload="verification_failed",
+            ),
+        ),
+    )
+
+    events = trajectory_events_from_result(
+        result,
+        run_id="run_verification_failed",
+        task="Fix failing tests",
+    )
+
+    verification_summary = events[-1].payload["summary"]["verification_summary"]
+    assert set(verification_summary) == {
+        "attempts",
+        "passed",
+        "skipped",
+        "last_observation",
+    }
+    assert verification_summary["attempts"] == 1
+    assert verification_summary["passed"] is False
+    assert verification_summary["skipped"] == 0
+    assert len(verification_summary["last_observation"]) < len(observation)
+    assert long_output not in verification_summary["last_observation"]
+
+
+def test_write_trajectory_jsonl_accepts_full_plan06_event_sequence(tmp_path: Path) -> None:
+    path = tmp_path / "trajectory.jsonl"
+    events = [
+        _event("run_started", step=None),
+        _event("approval_required"),
+        trajectory.state_saved_event("run_lesson_1", ".agent/run-state.json", 1),
+        trajectory.resume_started_event(
+            "run_lesson_1",
+            ".agent/run-state.json",
+            approvals=1,
+            rejections=0,
+        ),
+        trajectory.approval_decision_event(
+            "run_lesson_1",
+            "apply_patch",
+            "call_123",
+            "approved",
+            "approved by user",
+        ),
+        _event("tool_result"),
+        _event("verification_result"),
+        _event("final_output"),
+    ]
+
+    write_trajectory_jsonl(path, events)
+
+    assert [
+        json.loads(line)["event_type"]
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ] == [
+        "run_started",
+        "approval_required",
+        "state_saved",
+        "resume_started",
+        "approval_decision",
+        "tool_result",
+        "verification_result",
+        "final_output",
+    ]
 
 
 def test_trajectory_events_from_result_ends_with_run_stopped_when_stop_evidence_exists() -> None:
