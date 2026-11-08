@@ -1,0 +1,171 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from .contracts import ToolArgument, ToolSpec
+from .coding_policies import ShellCommandPolicy
+from .environment import Environment
+from .tool_observations import command_result_observation
+from .tools import FunctionTool, ToolApproval, ToolExecutionError
+
+
+DEFAULT_TEST_COMMAND = "python -m pytest"
+
+
+def create_shell_command_tool(
+    environment: Environment,
+    *,
+    needs_approval: ToolApproval = True,
+    command_policy: ShellCommandPolicy | None = None,
+) -> FunctionTool:
+    shell_syntax = (
+        "Windows cmd.exe syntax"
+        if sys.platform == "win32"
+        else "POSIX shell syntax"
+    )
+
+    def run_shell_command(
+        command: str,
+        cwd: str | Path | None = None,
+        timeout_seconds: float | None = None,
+        max_chars: int | None = None,
+    ) -> str:
+        if command_policy is not None:
+            decision = command_policy.classify(command)
+            if decision.blocked:
+                raise ToolExecutionError(
+                    "run_shell_command",
+                    f"{decision.category}: {decision.reason}",
+                )
+        result = environment.run(
+            command,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+        )
+        return command_result_observation(
+            "run_shell_command",
+            result,
+            max_chars=max_chars,
+        ).to_text()
+
+    return FunctionTool(
+        spec=ToolSpec(
+            name="run_shell_command",
+            description=(
+                f"Run a shell command using {shell_syntax}. The configured "
+                "workspace root is already the default working directory."
+            ),
+            arguments=[
+                ToolArgument(
+                    name="command",
+                    description=(
+                        "Shell command to execute. Use the cwd argument instead "
+                        "of changing directories inside the command."
+                    ),
+                    schema={"type": "string"},
+                ),
+                ToolArgument(
+                    name="cwd",
+                    description="Optional working directory for this command.",
+                    schema={"type": "string"},
+                    required=False,
+                ),
+                ToolArgument(
+                    name="timeout_seconds",
+                    description="Optional timeout for this command.",
+                    schema={"type": "number"},
+                    required=False,
+                ),
+                ToolArgument(
+                    name="max_chars",
+                    description="Maximum stdout and stderr characters to include.",
+                    schema={"type": "integer"},
+                    required=False,
+                ),
+            ],
+            returns="string",
+        ),
+        handler=run_shell_command,
+        needs_approval=(
+            command_policy.needs_approval
+            if command_policy is not None and needs_approval is True
+            else needs_approval
+        ),
+    )
+
+
+def create_test_command_tool(
+    environment: Environment,
+    *,
+    default_command: str = DEFAULT_TEST_COMMAND,
+    allowed_commands: tuple[str, ...] | None = None,
+    needs_approval: ToolApproval = False,
+) -> FunctionTool:
+    command_allowlist = allowed_commands or (default_command,)
+    allowed_command_text = "; ".join(command_allowlist)
+
+    def run_test_command(
+        command: str | None = None,
+        cwd: str | Path | None = None,
+        timeout_seconds: float | None = None,
+        max_chars: int | None = None,
+    ) -> str:
+        selected_command = command or default_command
+        if selected_command not in command_allowlist:
+            raise ToolExecutionError(
+                "run_test_command",
+                f"Command is not in the test command allowlist: {selected_command}",
+            )
+        result = environment.run(
+            selected_command,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+        )
+        return command_result_observation(
+            "run_test_command",
+            result,
+            max_chars=max_chars,
+        ).to_text()
+
+    return FunctionTool(
+        spec=ToolSpec(
+            name="run_test_command",
+            description=(
+                "Run one command from this exact allowlist; omit command to use "
+                f"the default: {allowed_command_text}"
+            ),
+            arguments=[
+                ToolArgument(
+                    name="command",
+                    description=(
+                        "Optional exact command from the allowlist. Allowed: "
+                        f"{allowed_command_text}"
+                    ),
+                    schema={"type": "string"},
+                    required=False,
+                ),
+                ToolArgument(
+                    name="cwd",
+                    description="Optional working directory for this test command.",
+                    schema={"type": "string"},
+                    required=False,
+                ),
+                ToolArgument(
+                    name="timeout_seconds",
+                    description="Optional timeout for this test command.",
+                    schema={"type": "number"},
+                    required=False,
+                ),
+                ToolArgument(
+                    name="max_chars",
+                    description="Maximum stdout and stderr characters to include.",
+                    schema={"type": "integer"},
+                    required=False,
+                ),
+            ],
+            returns="string",
+        ),
+        handler=run_test_command,
+        needs_approval=needs_approval,
+    )

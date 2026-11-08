@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyAgent 工作台</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/assets/app.css?v=20260814-9">
+  <script src="/assets/app.js?v=20260814-9" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar panel" id="conversation-drawer" aria-label="会话列表">
+      <header class="brand">
+        <div class="brand-mark" aria-hidden="true">M</div>
+        <div><strong>MyAgent</strong><span>LOCAL WORKBENCH</span></div>
+      </header>
+      <section class="model-launcher" aria-labelledby="conversation-model-label">
+        <div class="launcher-head">
+          <span id="conversation-model-label">当前对话模型</span>
+          <button class="text-button" id="open-model-settings" type="button">管理配置</button>
+        </div>
+        <select id="conversation-profile" aria-label="选择当前对话模型"></select>
+        <p id="model-reuse-note">一个配置可以用于多个会话</p>
+        <button class="primary full" id="new-conversation">＋ 使用此模型新建会话</button>
+      </section>
+      <div class="section-head">
+        <span>会话</span>
+        <button class="icon-button" id="toggle-archived" title="显示已归档会话">归档</button>
+      </div>
+      <nav class="conversation-list" id="conversation-list"></nav>
+      <button class="quiet full hidden" id="load-more-conversations">加载更多</button>
+      <footer class="local-note"><i></i>仅运行于本机 <code>127.0.0.1</code></footer>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <button class="mobile-menu" id="open-conversations" aria-label="打开会话列表">☰</button>
+        <div class="conversation-heading">
+          <span class="eyebrow">当前会话</span>
+          <h1 id="conversation-title">选择或新建一个会话</h1>
+        </div>
+        <div class="model-pill" id="active-model"><span></span>未激活模型</div>
+        <button class="mobile-menu" id="open-inspector" aria-label="打开检查器">设置</button>
+      </header>
+
+      <section class="chat-stage" id="chat-stage" aria-live="polite">
+        <div class="empty-chat" id="empty-chat">
+          <div class="empty-glyph" aria-hidden="true">⌁</div>
+          <h2>让 Agent 开始工作</h2>
+          <p>在左侧选择一个模型配置，然后创建任意多个会话。每条回复都保留可展开的检索、模型、工具和保存流程。</p>
+        </div>
+        <div class="messages" id="messages"></div>
+        <section class="planning-panel hidden" id="planning-panel" aria-label="任务规划"></section>
+        <div class="messages planning-final" id="planning-final"></div>
+      </section>
+
+      <footer class="composer-wrap">
+        <section class="planning-inline-actions hidden" id="planning-inline-actions" aria-label="当前计划操作"></section>
+        <form class="composer" id="composer">
+          <div class="mode-switch" id="mode-switch" aria-label="输入模式">
+            <button type="button" data-mode="chat" aria-pressed="true">聊天</button>
+            <button type="button" data-mode="plan" aria-pressed="false">规划</button>
+          </div>
+          <textarea id="message-input" rows="1" maxlength="20000" placeholder="输入任务，Enter 发送，Shift + Enter 换行" aria-label="消息内容"></textarea>
+          <div class="composer-actions">
+            <span id="composer-hint">等待输入</span>
+            <button type="button" class="danger hidden" id="stop-generation">停止</button>
+            <button type="submit" class="send" id="send-message">发送</button>
+          </div>
+        </form>
+      </footer>
+    </main>
+
+    <aside class="inspector panel" id="inspector-drawer" aria-label="检查器">
+      <header class="inspector-head">
+        <div><span class="eyebrow">INSPECTOR</span><h2>工作区控制</h2></div>
+        <button class="mobile-close" id="close-inspector" aria-label="关闭检查器">×</button>
+      </header>
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="models">模型</button>
+        <button class="tab" data-tab="memories">记忆</button>
+        <button class="tab" data-tab="knowledge">知识</button>
+      </div>
+
+      <section class="tab-panel active" id="tab-models">
+        <div class="panel-title"><h3>可复用模型配置</h3><button class="quiet" id="reset-profile">添加配置</button></div>
+        <p class="panel-intro">厂商、Key 和模型只需配置一次；在左侧选择后，可连续创建多个会话。</p>
+        <div id="profile-list" class="stack-list"></div>
+        <details class="profile-editor" id="profile-editor">
+          <summary id="profile-editor-title">新增模型配置</summary>
+          <form class="control-form" id="profile-form" autocomplete="off">
+            <input type="hidden" id="profile-id">
+            <label>配置名称<input id="profile-name" maxlength="100" required placeholder="例如：DeepSeek 日常"></label>
+            <label>厂商<select id="profile-provider" required></select></label>
+            <p class="form-note hidden" id="provider-note"></p>
+            <label>模型 ID<input id="profile-model" list="profile-model-options" maxlength="200" required placeholder="输入 Key 后自动获取"></label>
+            <datalist id="profile-model-options"></datalist>
+            <label>Base URL<input id="profile-base-url" maxlength="2000" required spellcheck="false"></label>
+            <label>API Key<input id="profile-api-key" type="password" maxlength="20000" autocomplete="new-password" placeholder="保存后不会再次显示"></label>
+            <div class="form-actions">
+              <button type="button" class="quiet" id="load-models">获取模型</button>
+              <button type="button" class="quiet" id="test-profile">测试连接</button>
+              <button type="submit" class="primary">保存配置</button>
+            </div>
+          </form>
+        </details>
+      </section>
+
+      <section class="tab-panel" id="tab-memories">
+        <div class="panel-title"><h3>长期记忆</h3><select id="memory-status"><option value="active">启用</option><option value="disabled">停用</option><option value="">全部</option></select></div>
+        <form class="control-form compact hidden" id="memory-form">
+          <input type="hidden" id="memory-conversation-id"><input type="hidden" id="memory-user-id"><input type="hidden" id="memory-assistant-id">
+          <label>保存内容<textarea id="memory-content" rows="4" maxlength="2000" required></textarea></label>
+          <div class="split"><label>类型<select id="memory-kind"><option value="fact">事实</option><option value="preference">偏好</option><option value="instruction">指令</option></select></label><label>范围<select id="memory-scope"><option value="conversation">当前会话</option><option value="global">全局</option></select></label></div>
+          <div class="form-actions"><button type="button" class="quiet" id="cancel-memory">取消</button><button class="primary">保存记忆</button></div>
+        </form>
+        <div id="memory-list" class="stack-list"></div>
+      </section>
+
+      <section class="tab-panel" id="tab-knowledge">
+        <div class="panel-title"><h3>知识库</h3><button class="quiet" id="toggle-knowledge-form">新建</button></div>
+        <p class="form-note" id="embedding-note">索引需要在启动环境中启用 embedding；正文仍可先保存。</p>
+        <form class="control-form compact hidden" id="knowledge-form">
+          <label>标题<input id="knowledge-title" maxlength="200" required></label>
+          <label>正文<textarea id="knowledge-text" rows="8" maxlength="200000" required></textarea></label>
+          <div class="form-actions"><button type="button" class="quiet" id="cancel-knowledge">取消</button><button class="primary">保存正文</button></div>
+        </form>
+        <div id="knowledge-list" class="stack-list"></div>
+      </section>
+    </aside>
+  </div>
+  <div class="scrim" id="scrim"></div>
+  <div class="toast" id="toast" role="status"></div>
+</body>
+</html>

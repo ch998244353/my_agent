@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MyAgent Chat 与 Planning 编排子流程",
+    "locale": "zh-CN",
+    "animation": "none",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "ui", "label": "请求与返回" },
+    { "id": "chat", "label": "ChatService" },
+    { "id": "planning", "label": "PlanningService" },
+    { "id": "data", "label": "PostgreSQL 与记忆" }
+  ],
+  "phases": [
+    { "id": "check", "label": "读取与校验", "fromCol": 0, "toCol": 1 },
+    { "id": "prepare", "label": "准备执行", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "commit", "label": "运行与提交", "fromCol": 4, "toCol": 4, "variant": "dashed" }
+  ],
+  "mainPath": ["request", "conversation", "retrieval", "config", "runner", "commit", "reply"],
+  "semanticChecks": {
+    "allowedRoots": ["request"],
+    "allowedTerminals": ["reply"],
+    "requiredPaths": [
+      { "from": "request", "to": "reply" },
+      { "from": "planning_service", "to": "runner" }
+    ]
+  },
+  "nodes": [
+    { "id": "request", "lane": "ui", "col": 0, "type": "frontend", "label": "消息或计划操作", "width": 144 },
+    { "id": "reply", "lane": "ui", "col": 4, "type": "frontend", "label": "ChatReply / PlanSnapshot", "sublabel": "只返回已确认状态", "width": 174 },
+    { "id": "conversation", "lane": "chat", "col": 1, "type": "database", "label": "读取会话", "sublabel": "不存在或已归档即停止", "width": 150 },
+    { "id": "retrieval", "lane": "chat", "col": 2, "type": "database", "label": "Hybrid Retrieval", "sublabel": "记忆 + 知识 → ContextChunk", "width": 162 },
+    { "id": "config", "lane": "chat", "col": 3, "type": "backend", "label": "组装 RunConfig", "sublabel": "Session + 上下文 + Profile", "width": 154 },
+    { "id": "runner", "lane": "chat", "col": 4, "type": "backend", "label": "唯一 Runner", "sublabel": "run_async 或 run_stream", "width": 160 },
+    { "id": "planning_service", "lane": "planning", "col": 1, "type": "backend", "label": "PlanningService", "sublabel": "draft · approve · resume", "width": 150 },
+    { "id": "plan_store", "lane": "planning", "col": 2, "type": "database", "label": "PlanStore", "sublabel": "版本、CAS 与 TaskEvent", "width": 156 },
+    { "id": "plan_execute", "lane": "planning", "col": 3, "type": "backend", "label": "逐步执行计划", "sublabel": "冻结快照并复用 Runner", "width": 154 },
+    { "id": "commit", "lane": "data", "col": 4, "type": "database", "label": "校验后成功提交", "sublabel": "提交后 best-effort 提取记忆", "width": 174 }
+  ],
+  "edges": [
+    { "id": "request-conversation", "from": "request", "to": "conversation", "label": "普通聊天", "role": "main" },
+    { "id": "conversation-retrieval", "from": "conversation", "to": "retrieval", "label": "会话有效", "role": "main" },
+    { "id": "retrieval-config", "from": "retrieval", "to": "config", "label": "ContextChunk + citations", "role": "main" },
+    { "id": "config-runner", "from": "config", "to": "runner", "label": "Agent + RunConfig", "role": "main" },
+    { "id": "runner-commit", "from": "runner", "to": "commit", "label": "有效 RunResult", "variant": "emphasis", "role": "main" },
+    { "id": "commit-reply", "from": "commit", "to": "reply", "label": "消息 ID 与 sequence", "variant": "emphasis", "role": "return" },
+    { "id": "request-planning", "from": "request", "to": "planning_service", "label": "Planning API", "variant": "emphasis", "role": "branch" },
+    { "id": "planning-store", "from": "planning_service", "to": "plan_store", "label": "草案 / 状态事务", "variant": "dashed", "role": "branch" },
+    { "id": "store-execute", "from": "plan_store", "to": "plan_execute", "label": "批准或恢复", "variant": "emphasis", "role": "branch" },
+    { "id": "execute-runner", "from": "plan_execute", "to": "runner", "label": "步骤 Agent", "variant": "emphasis", "role": "branch" }
+  ]
+}

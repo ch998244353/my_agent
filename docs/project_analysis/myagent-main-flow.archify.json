@@ -1,0 +1,144 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MyAgent 项目主执行流程",
+    "locale": "zh-CN",
+    "animation": "none",
+    "quality_profile": "showcase",
+    "output": "docs/project_analysis/myagent-main-flow.html"
+  },
+  "lanes": [
+    { "id": "ui", "label": "用户与 Web 工作台" },
+    { "id": "app", "label": "FastAPI 与应用服务" },
+    { "id": "runtime", "label": "上下文与 Agent Runtime" },
+    { "id": "tools", "label": "工具与审批" }
+  ],
+  "phases": [
+    { "id": "intake", "label": "请求进入", "fromCol": 0, "toCol": 2 },
+    { "id": "prepare", "label": "编排与准备", "fromCol": 3, "toCol": 4, "variant": "emphasis" },
+    { "id": "finish", "label": "执行与提交", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": [
+    "workbench",
+    "api",
+    "services",
+    "retrieval",
+    "runner",
+    "model",
+    "postgres",
+    "reply"
+  ],
+  "semanticChecks": {
+    "allowedRoots": ["workbench"],
+    "allowedTerminals": ["reply"],
+    "requiredPaths": [
+      { "from": "workbench", "to": "reply" },
+      { "from": "services", "to": "runner" },
+      { "from": "model", "to": "tool" }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "workbench",
+      "lane": "ui",
+      "col": 0,
+      "type": "frontend",
+      "label": "用户 / Web 工作台",
+      "sublabel": "输入、模型选择与流式状态",
+      "width": 176
+    },
+    {
+      "id": "reply",
+      "lane": "ui",
+      "col": 5,
+      "type": "frontend",
+      "label": "可见结果",
+      "sublabel": "delta / status / done",
+      "tag": "SSE",
+      "width": 150
+    },
+    {
+      "id": "retrieval",
+      "lane": "runtime",
+      "col": 3,
+      "type": "database",
+      "label": "会话与检索上下文",
+      "sublabel": "历史 · 记忆 · 知识",
+      "tag": "ContextChunk",
+      "width": 176
+    },
+    {
+      "id": "postgres",
+      "lane": "app",
+      "col": 5,
+      "type": "database",
+      "label": "PostgreSQL 提交",
+      "sublabel": "消息 / 计划 / TaskEvent",
+      "tag": "success only / CAS",
+      "width": 172
+    },
+    {
+      "id": "runner",
+      "lane": "runtime",
+      "col": 4,
+      "type": "backend",
+      "label": "Runner / RunStream",
+      "sublabel": "惰性启动唯一 Agent loop",
+      "tag": "RunState + RunEvent",
+      "width": 178
+    },
+    {
+      "id": "model",
+      "lane": "runtime",
+      "col": 5,
+      "type": "cloud",
+      "label": "模型回合与决策",
+      "sublabel": "重试 / fallback / final",
+      "tag": "run_model_request",
+      "width": 174
+    },
+    {
+      "id": "tool",
+      "lane": "tools",
+      "col": 4,
+      "type": "security",
+      "label": "工具执行 / 审批",
+      "sublabel": "Guardrail · pause/resume · Handoff",
+      "tag": "Tool observation",
+      "width": 184
+    },
+    {
+      "id": "services",
+      "lane": "app",
+      "col": 3,
+      "type": "backend",
+      "label": "ChatService / PlanningService",
+      "sublabel": "普通聊天或计划草案、批准、恢复",
+      "width": 210
+    },
+    {
+      "id": "api",
+      "lane": "app",
+      "col": 1,
+      "type": "backend",
+      "label": "FastAPI 路由",
+      "sublabel": "stream_message / Planning API",
+      "tag": "HTTP + SSE",
+      "width": 180
+    }
+  ],
+  "edges": [
+    { "id": "web-request", "from": "workbench", "to": "api", "label": "HTTP 请求", "role": "main" },
+    { "id": "api-dispatch", "from": "api", "to": "services", "label": "普通聊天或 Planning", "role": "main" },
+    { "id": "read-context", "from": "services", "to": "retrieval", "label": "读取会话并检索", "role": "main" },
+    { "id": "context-runner", "from": "retrieval", "to": "runner", "label": "ContextChunk + Session", "role": "main" },
+    { "id": "planning-runner", "from": "services", "to": "runner", "label": "草案或步骤执行", "variant": "emphasis", "role": "branch" },
+    { "id": "start-loop", "from": "runner", "to": "model", "label": "启动模型回合", "role": "main" },
+    { "id": "direct-tool", "from": "model", "to": "tool", "label": "tool_calls / 必要时暂停", "variant": "security", "role": "branch" },
+    { "id": "tool-observation", "from": "tool", "to": "model", "label": "观察结果或批准后恢复", "variant": "dashed", "role": "return" },
+    { "id": "commit-success", "from": "model", "to": "postgres", "label": "最终答案后批量提交", "variant": "emphasis", "role": "main" },
+    { "id": "stream-progress", "from": "runner", "to": "reply", "label": "SSE delta / status", "variant": "dashed", "role": "async" },
+    { "id": "saved-done", "from": "postgres", "to": "reply", "label": "done + 已保存回复", "variant": "emphasis", "role": "return" }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MyAgent 工具执行与审批子流程",
+    "locale": "zh-CN",
+    "animation": "none",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "model", "label": "模型与观察结果" },
+    { "id": "policy", "label": "审批与 Guardrail", "variant": "exception" },
+    { "id": "execution", "label": "ToolRegistry 与 Handler" },
+    { "id": "state", "label": "RunState 记录" }
+  ],
+  "phases": [
+    { "id": "resolve", "label": "解析工具", "fromCol": 0, "toCol": 1 },
+    { "id": "authorize", "label": "授权与输入检查", "fromCol": 2, "toCol": 3, "variant": "security" },
+    { "id": "execute", "label": "执行、输出检查与记录", "fromCol": 4, "toCol": 5, "variant": "emphasis" }
+  ],
+  "mainPath": ["tool_call", "lookup", "approval", "input_guard", "handler", "interpret", "output_guard"],
+  "semanticChecks": {
+    "allowedRoots": ["tool_call"],
+    "allowedTerminals": ["observation"],
+    "requiredPaths": [
+      { "from": "tool_call", "to": "observation" },
+      { "from": "approval", "to": "pause" }
+    ]
+  },
+  "nodes": [
+    { "id": "tool_call", "lane": "model", "col": 0, "type": "cloud", "label": "模型 ToolCall", "sublabel": "name · args · call_id", "width": 164 },
+    { "id": "observation", "lane": "model", "col": 5, "type": "messagebus", "label": "工具观察结果", "sublabel": "回到下一次模型输入", "width": 166 },
+    { "id": "approval", "lane": "policy", "col": 2, "type": "security", "label": "审批状态", "sublabel": "approved / rejected / required", "width": 176 },
+    { "id": "pause", "lane": "policy", "col": 3, "type": "security", "label": "暂停或拒绝", "sublabel": "保存 pending_tool_calls", "tag": "resumable RunState", "width": 170 },
+    { "id": "input_guard", "lane": "policy", "col": 4, "type": "security", "label": "Tool Input Guardrail", "sublabel": "allow / reject_content / raise", "width": 184 },
+    { "id": "output_guard", "lane": "policy", "col": 5, "type": "security", "label": "Tool Output Guardrail", "sublabel": "检查 Handler 返回内容", "width": 184 },
+    { "id": "lookup", "lane": "execution", "col": 1, "type": "backend", "label": "Registry 查找工具", "sublabel": "存在、启用、执行限制", "width": 172 },
+    { "id": "handler", "lane": "execution", "col": 4, "type": "backend", "label": "ToolRegistry.execute", "sublabel": "调用真实 Handler", "width": 176 },
+    { "id": "interpret", "lane": "execution", "col": 5, "type": "backend", "label": "解释工具返回值", "sublabel": "observation / final / stop", "width": 170 },
+    { "id": "record", "lane": "state", "col": 4, "type": "database", "label": "写入 RunState", "sublabel": "RunItem + report + step count", "width": 170 }
+  ],
+  "edges": [
+    { "id": "call-lookup", "from": "tool_call", "to": "lookup", "label": "解析 action", "role": "main" },
+    { "id": "lookup-approval", "from": "lookup", "to": "approval", "label": "requires_approval_for", "variant": "security", "role": "main" },
+    { "id": "approval-input", "from": "approval", "to": "input_guard", "label": "无需审批或已批准", "role": "main" },
+    { "id": "approval-pause", "from": "approval", "to": "pause", "label": "需要批准", "variant": "security", "role": "branch" },
+    { "id": "pause-input", "from": "pause", "to": "input_guard", "label": "批准后 resume", "variant": "emphasis", "role": "return" },
+    { "id": "input-handler", "from": "input_guard", "to": "handler", "label": "allow", "role": "main" },
+    { "id": "handler-interpret", "from": "handler", "to": "interpret", "label": "原始返回值", "role": "main" },
+    { "id": "interpret-output", "from": "interpret", "to": "output_guard", "label": "检查输出", "variant": "security", "role": "main" },
+    { "id": "output-record", "from": "output_guard", "to": "record", "label": "安全 observation", "variant": "emphasis", "role": "return" },
+    { "id": "input-reject", "from": "input_guard", "to": "record", "label": "reject_content / exception", "variant": "security", "role": "error" },
+    { "id": "pause-reject", "from": "pause", "to": "record", "label": "拒绝或取消", "variant": "security", "role": "error" },
+    { "id": "record-observation", "from": "record", "to": "observation", "label": "RunItem / final output", "variant": "emphasis", "role": "return" }
+  ]
+}

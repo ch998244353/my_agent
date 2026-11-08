@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyAgent 流程图图册</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif; background: #0a0f1d; color: #e8edf7; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; grid-template-rows: auto 1fr; background: #0a0f1d; }
+    header { display: flex; gap: 18px; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid #26324a; background: #11182a; }
+    .title { min-width: 220px; }
+    h1 { margin: 0; font-size: 18px; letter-spacing: .02em; }
+    #description { margin: 5px 0 0; color: #9eabc2; font-size: 12px; }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+    button, a { border: 1px solid #33415e; border-radius: 9px; background: #172138; color: #d9e2f2; font: inherit; font-size: 12px; text-decoration: none; padding: 8px 11px; cursor: pointer; }
+    button:hover, a:hover { border-color: #6e8bc5; background: #1d2c4a; }
+    button[aria-selected="true"] { color: #fff; border-color: #72a3ff; background: #24477e; box-shadow: inset 0 0 0 1px #72a3ff33; }
+    #open-current { white-space: nowrap; }
+    main { min-height: 0; padding: 10px; }
+    iframe { display: block; width: 100%; height: 100%; min-height: 720px; border: 1px solid #26324a; border-radius: 12px; background: #fff; }
+    @media (max-width: 900px) {
+      header { align-items: stretch; flex-direction: column; }
+      nav { justify-content: flex-start; }
+      #open-current { align-self: flex-start; }
+      iframe { min-height: 650px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">
+      <h1>MyAgent 流程图图册</h1>
+      <p id="description">先看全局主链路，再切换到可独立缩放、搜索和导出的详细子图。</p>
+    </div>
+    <nav aria-label="流程图选择">
+      <button type="button" data-src="../myagent-main-flow.html" data-description="项目总览：从浏览器请求到 Agent、工具、持久化与最终响应。">总览</button>
+      <button type="button" data-src="web-sse.html" data-description="Web 与 SSE：连接建立、后台任务、事件队列、增量输出及错误处理。">Web / SSE</button>
+      <button type="button" data-src="service-planning.html" data-description="服务编排：ChatService、检索、PlanningService、Runner 与提交边界。">Chat / Planning</button>
+      <button type="button" data-src="agent-runtime.html" data-description="Agent 运行时：RunStream、事件通道、Agent Loop、模型决策与工具回环。">Runner / Agent Loop</button>
+      <button type="button" data-src="tool-approval.html" data-description="工具执行：注册表查找、审批暂停/恢复、输入输出护栏与 RunState 记录。">工具 / 审批</button>
+    </nav>
+    <a id="open-current" href="../myagent-main-flow.html" target="_blank" rel="noopener">单独打开当前图 ↗</a>
+  </header>
+  <main>
+    <iframe id="diagram" title="MyAgent 流程图" src="../myagent-main-flow.html"></iframe>
+  </main>
+  <script>
+    const buttons = [...document.querySelectorAll('button[data-src]')];
+    const frame = document.querySelector('#diagram');
+    const description = document.querySelector('#description');
+    const openCurrent = document.querySelector('#open-current');
+
+    function select(button) {
+      buttons.forEach(item => item.setAttribute('aria-selected', String(item === button)));
+      frame.src = button.dataset.src;
+      description.textContent = button.dataset.description;
+      openCurrent.href = button.dataset.src;
+      location.hash = button.dataset.src.replace(/\.html$/, '');
+    }
+
+    buttons.forEach(button => button.addEventListener('click', () => select(button)));
+    const requested = location.hash.slice(1);
+    select(buttons.find(button => button.dataset.src.replace(/\.html$/, '') === requested) || buttons[0]);
+  </script>
+</body>
+</html>

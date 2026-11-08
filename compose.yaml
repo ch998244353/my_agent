@@ -1,0 +1,23 @@
+# 启动一个带有 pgvector 扩展的 PostgreSQL 数据库容器
+
+services:
+  postgres:  # 定义 Docker Compose 要启动的服务,之后可以使用docker compose up postgres单独启动它 (容器 → 镜像启动后形成的运行实例)
+  # 当执行 docker compose up ,Docker 会 检查本地有没有这个镜像 没有就从镜像仓库下载 根据镜像创建容器 启动容器中的 PostgreSQL 根据 YAML 中的环境变量创建数据库、用户和密码
+    image: pgvector/pgvector:0.8.2-pg18-bookworm  # 表示使用这个 Docker 镜像创建容器 (镜像 → 类似软件安装包或系统模板),本质上是在说请使用这个版本的 PostgreSQL + pgvector 模板，创建并启动一个数据库容器
+    environment:  
+      POSTGRES_DB: ${POSTGRES_DB:-myagent} # 要创建的数据库名称,如果宿主机设置了 POSTGRES_DB，使用宿主机提供的值；否则使用 myagent
+      POSTGRES_USER: ${POSTGRES_USER:-myagent} # 数据库用户名
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-myagent-local} # 数据库用户密码
+    ports: # 端口映射
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-55432}:5432"  # 宿主机端口可以通过环境变量修改
+    volumes:  # 把 Docker 管理的持久化卷挂载到容器目录
+      - postgres_data:/var/lib/postgresql
+    healthcheck:  # 用于判断PostgreSQL 进程虽然已经启动，但数据库是否真的已经能够接受连接？
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]  # pg_isready 是 PostgreSQL 自带的检查工具，用于判断数据库是否可以接受连接
+      interval: 2s  # 每隔 2 秒执行一次健康检查
+      timeout: 5s  # 单次健康检查最多允许执行 5 秒
+      retries: 15
+      start_period: 5s  # 容器启动后先给予 5 秒的启动宽限期
+
+volumes:
+  postgres_data:

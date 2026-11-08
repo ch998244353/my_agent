@@ -1,0 +1,26 @@
+# TOML 是一种配置文件格式,用于描述整个 Python 项目的配置项目名称例如 : 项目版本,Python 版本要求,项目依赖,构建方式,Ruff、Black、Pytest 等工具的配置
+
+[project]
+name = "my-agent"
+version = "0.1.0"
+description = "A from-zero teaching project for building an Agents SDK-style agent."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.141.1",
+    "keyring>=25.7.0",
+    "openai>=2.31.0",
+    "pydantic>=2.13.4",
+    "psycopg[binary,pool]>=3.3.4",
+    "uvicorn>=0.52.1",
+]
+
+[project.optional-dependencies]
+test = [
+    "httpx>=0.28.1",
+]
+
+[project.scripts]
+my-agent-chat-http = "agents.chat_backend.http:main"
+
+[tool.black]
+line-length = 88

@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MyAgent Web 请求与 SSE 子流程",
+    "locale": "zh-CN",
+    "animation": "none",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "ui", "label": "浏览器" },
+    { "id": "http", "label": "FastAPI StreamingResponse" },
+    { "id": "service", "label": "ChatService 任务" },
+    { "id": "failure", "label": "断开与错误", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "open", "label": "建立请求", "fromCol": 0, "toCol": 2 },
+    { "id": "stream", "label": "并发消费事件", "fromCol": 3, "toCol": 4, "variant": "emphasis" },
+    { "id": "close", "label": "提交与结束", "fromCol": 5, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["browser", "route", "generator", "chat_task", "reply", "visible"],
+  "semanticChecks": {
+    "allowedRoots": ["browser"],
+    "allowedTerminals": ["visible"],
+    "requiredPaths": [
+      { "from": "browser", "to": "visible" },
+      { "from": "chat_task", "to": "dispatch" }
+    ]
+  },
+  "nodes": [
+    { "id": "browser", "lane": "ui", "col": 0, "type": "frontend", "label": "Web 工作台", "sublabel": "发送消息并监听 SSE", "width": 160 },
+    { "id": "visible", "lane": "ui", "col": 5, "type": "frontend", "label": "页面更新", "sublabel": "delta · status · done", "width": 150 },
+    { "id": "route", "lane": "http", "col": 1, "type": "backend", "label": "stream_message", "sublabel": "校验路径与请求体", "tag": "FastAPI route", "width": 160 },
+    { "id": "generator", "lane": "http", "col": 2, "type": "backend", "label": "SSE generate()", "sublabel": "start 后创建异步任务", "width": 164 },
+    { "id": "queue", "lane": "http", "col": 3, "type": "messagebus", "label": "RunEvent Queue", "sublabel": "put_nowait / queue.get", "tag": "进程内 asyncio.Queue", "width": 170 },
+    { "id": "dispatch", "lane": "http", "col": 4, "type": "backend", "label": "事件分发", "sublabel": "文本 delta 或运行 status", "width": 158 },
+    { "id": "chat_task", "lane": "service", "col": 2, "type": "backend", "label": "ChatService.send_message", "sublabel": "Runner 运行并返回 ChatReply", "width": 190 },
+    { "id": "reply", "lane": "service", "col": 4, "type": "database", "label": "保存运行详情", "sublabel": "set_run_trace 后发送 done", "width": 170 },
+    { "id": "failed", "lane": "failure", "col": 4, "type": "security", "label": "断开或异常", "sublabel": "cancel task / SSE error", "width": 160 }
+  ],
+  "edges": [
+    { "id": "open-stream", "from": "browser", "to": "route", "label": "POST 消息", "role": "main" },
+    { "id": "route-generator", "from": "route", "to": "generator", "label": "StreamingResponse", "role": "main" },
+    { "id": "spawn-chat", "from": "generator", "to": "chat_task", "label": "asyncio.create_task", "role": "main" },
+    { "id": "event-publish", "from": "chat_task", "to": "queue", "label": "on_event = put_nowait", "variant": "dashed", "role": "async" },
+    { "id": "queue-consume", "from": "queue", "to": "dispatch", "label": "wait_for(queue.get)", "role": "main" },
+    { "id": "stream-events", "from": "dispatch", "to": "visible", "label": "SSE delta / status", "variant": "emphasis", "role": "async" },
+    { "id": "chat-reply", "from": "chat_task", "to": "reply", "label": "ChatReply", "variant": "emphasis", "role": "main" },
+    { "id": "reply-done", "from": "reply", "to": "visible", "label": "SSE done + 已保存回复", "variant": "emphasis", "role": "return" },
+    { "id": "disconnect", "from": "generator", "to": "failed", "label": "client disconnected", "variant": "security", "role": "error" },
+    { "id": "chat-error", "from": "chat_task", "to": "failed", "label": "服务异常", "variant": "security", "role": "error" },
+    { "id": "error-event", "from": "failed", "to": "visible", "label": "SSE error", "variant": "security", "role": "return" }
+  ]
+}

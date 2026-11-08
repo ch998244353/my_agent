@@ -1,0 +1,58 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "MyAgent Runner 与 Agent Loop 子流程",
+    "locale": "zh-CN",
+    "animation": "none",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    { "id": "caller", "label": "调用方" },
+    { "id": "stream", "label": "RunStream 与事件通道" },
+    { "id": "loop", "label": "同步 Agent Loop" },
+    { "id": "model", "label": "模型执行" },
+    { "id": "tool", "label": "工具分支" }
+  ],
+  "phases": [
+    { "id": "construct", "label": "构造惰性流", "fromCol": 0, "toCol": 1 },
+    { "id": "produce", "label": "启动唯一 producer", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "turn", "label": "模型、工具与结果", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["call", "runstream", "producer", "loop_core", "prepare", "model_request", "decision", "build_result", "consumer"],
+  "semanticChecks": {
+    "allowedRoots": ["call"],
+    "allowedTerminals": ["consumer"],
+    "requiredPaths": [
+      { "from": "call", "to": "consumer" },
+      { "from": "decision", "to": "tool_exec" }
+    ]
+  },
+  "nodes": [
+    { "id": "call", "lane": "caller", "col": 0, "type": "external", "label": "Runner.run_*", "width": 130 },
+    { "id": "consumer", "lane": "caller", "col": 5, "type": "frontend", "label": "调用方获得结果", "sublabel": "RunEvent 或 RunResult", "width": 148 },
+    { "id": "runstream", "lane": "stream", "col": 1, "type": "backend", "label": "RunStream", "sublabel": "构造时不启动 Agent", "tag": "lazy · single consumer", "width": 166 },
+    { "id": "producer", "lane": "stream", "col": 2, "type": "backend", "label": "RunStream._produce", "sublabel": "启动 producer 并管理终止", "width": 176 },
+    { "id": "event_channel", "lane": "stream", "col": 4, "type": "messagebus", "label": "_EventChannel", "sublabel": "有界 asyncio.Queue", "tag": "RunEvent", "width": 158 },
+    { "id": "loop_core", "lane": "loop", "col": 3, "type": "backend", "label": "_run_agent_loop_impl", "sublabel": "RunState 是运行事实源", "width": 180 },
+    { "id": "prepare", "lane": "loop", "col": 4, "type": "database", "label": "prepare_turn_input", "sublabel": "Session · ContextChunk · memory", "width": 170 },
+    { "id": "build_result", "lane": "loop", "col": 5, "type": "backend", "label": "构造 RunResult", "sublabel": "终态 + 保存 Session", "width": 148 },
+    { "id": "model_request", "lane": "model", "col": 4, "type": "cloud", "label": "run_model_request", "sublabel": "deadline · retry · fallback", "width": 174 },
+    { "id": "decision", "lane": "model", "col": 5, "type": "backend", "label": "响应决策", "sublabel": "final / tool_calls / handoff", "width": 148 },
+    { "id": "tool_exec", "lane": "tool", "col": 4, "type": "security", "label": "工具与审批", "sublabel": "Guardrail · pause/resume", "width": 166 }
+  ],
+  "edges": [
+    { "id": "call-stream", "from": "call", "to": "runstream", "label": "构造", "role": "main" },
+    { "id": "stream-producer", "from": "runstream", "to": "producer", "label": "首次迭代时启动", "role": "main" },
+    { "id": "producer-loop", "from": "producer", "to": "loop_core", "label": "to_thread 运行同步 loop", "variant": "emphasis", "role": "main" },
+    { "id": "loop-prepare", "from": "loop_core", "to": "prepare", "label": "每轮准备输入", "role": "main" },
+    { "id": "prepare-model", "from": "prepare", "to": "model_request", "label": "ModelRequest", "role": "main" },
+    { "id": "model-decision", "from": "model_request", "to": "decision", "label": "完整 ModelExecution", "variant": "emphasis", "role": "main" },
+    { "id": "decision-result", "from": "decision", "to": "build_result", "label": "final", "variant": "emphasis", "role": "main" },
+    { "id": "result-consumer", "from": "build_result", "to": "consumer", "label": "producer 原始结果", "variant": "emphasis", "role": "return" },
+    { "id": "producer-events", "from": "producer", "to": "event_channel", "label": "_LoopEventBridge.emit", "variant": "dashed", "role": "async" },
+    { "id": "events-consumer", "from": "event_channel", "to": "consumer", "label": "顺序 RunEvent", "variant": "dashed", "role": "async" },
+    { "id": "decision-tool", "from": "decision", "to": "tool_exec", "label": "tool_calls", "variant": "security", "role": "branch" },
+    { "id": "tool-observation", "from": "tool_exec", "to": "prepare", "label": "observation 进入下一轮", "variant": "dashed", "role": "return" }
+  ]
+}
